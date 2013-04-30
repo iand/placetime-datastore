@@ -69,9 +69,9 @@ func profileKey(pid string) string {
 func pidFromKey(key string) string {
 	if strings.HasSuffix(key, ":info") {
 		return key[:len(key)-5]
-	} else {
-		return key
 	}
+	return key
+
 }
 
 func feedsKey(pid string) string {
