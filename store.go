@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -62,6 +64,14 @@ func followerScore(t time.Time) float64 {
 
 func profileKey(pid string) string {
 	return fmt.Sprintf("%s:info", pid)
+}
+
+func pidFromKey(key string) string {
+	if strings.HasSuffix(key, ":info") {
+		return key[:len(key)-5]
+	} else {
+		return key
+	}
 }
 
 func feedsKey(pid string) string {
@@ -890,4 +900,36 @@ func (s *RedisStore) GrabItemsNeedingImages(max int) ([]*Item, error) {
 	}
 
 	return items, nil
+}
+
+func (s *RedisStore) FindProfilesBySubstring(srch string) ([]*Profile, error) {
+
+	profiles := make([]*Profile, 0)
+
+	// Bail if the search contains non alphanumerics
+	allgood, _ := regexp.MatchString("^[a-zA-Z0-9]+$", srch)
+	if !allgood {
+		log.Printf("Invalid search string supplied: %s", srch)
+		return profiles, nil
+	}
+
+	searchKey := fmt.Sprintf("*%s*:info", srch)
+	rs := s.db.Command("KEYS", searchKey)
+	if !rs.IsOK() {
+		return nil, rs.Error()
+	}
+
+	vals := rs.ValuesAsStrings()
+
+	for _, key := range vals {
+		profile, err := s.Profile(pidFromKey(key))
+		if err != nil {
+			// TODO: log
+		} else {
+			profiles = append(profiles, profile)
+		}
+	}
+
+	return profiles, nil
+
 }

@@ -7,7 +7,7 @@ import (
 type Profile struct {
 	Pid            string    `json:"pid"`
 	Name           string    `json:"pname,omitempty"`
-	PasswordHash   []byte    `json:""`
+	PasswordHash   []byte    `json:"-"`
 	Bio            string    `json:"bio,omitempty"`
 	Joined         time.Time `json:"joined"`
 	PossiblyCount  int       `json:"pcount"`

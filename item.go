@@ -1,6 +1,7 @@
 package datastore
 
 import (
+	"fmt"
 	"time"
 )
 
@@ -35,4 +36,8 @@ type FormattedItem struct {
 	Link  string `json:"link"`
 	Media string `json:"media"`
 	Image string `json:"image"`
+}
+
+func (i *Item) String() string {
+	return fmt.Sprintf("Title: %sLink: %s", i.Text, i.Link)
 }
