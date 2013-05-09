@@ -28,6 +28,8 @@ const (
 
 var (
 	thedb *redis.Database
+
+	ProfileProperties = []string{"name", "feedurl", "bio", "email", "parentpid"}
 )
 
 func NewRedisStore() *RedisStore {
@@ -174,7 +176,7 @@ func (s *RedisStore) ProfileExists(pid string) (bool, error) {
 }
 
 func (s *RedisStore) Profile(pid string) (*Profile, error) {
-	rs := s.db.Command("HMGET", profileKey(pid), "name", "bio", "feedurl", "parentpid")
+	rs := s.db.Command("HMGET", profileKey(pid), "name", "bio", "feedurl", "parentpid", "email")
 	if !rs.IsOK() {
 		return nil, rs.Error()
 	}
@@ -186,6 +188,7 @@ func (s *RedisStore) Profile(pid string) (*Profile, error) {
 		Bio:       vals[1],
 		FeedUrl:   vals[2],
 		ParentPid: vals[3],
+		Email:     vals[4],
 	}
 
 	rs = s.db.Command("ZCARD", possiblyKey(pid, ORDERING_TS))
@@ -245,20 +248,31 @@ func (s *RedisStore) AddProfile(pid string, password string, pname string, bio s
 
 }
 
-func (s *RedisStore) UpdateProfile(pid string, pname string, bio string, feedurl string, parentpid string) error {
+func (s *RedisStore) UpdateProfile(pid string, values map[string]string) error {
+	params := make([]interface{}, 0)
+	params = append(params, profileKey(pid))
+	for k, v := range values {
+		params = append(params, k, v)
+	}
 
-	rs := s.db.Command("HMSET", profileKey(pid), "name", pname, "bio", bio, "feedurl", feedurl, "parentpid", parentpid)
+	if len(params) <= 1 {
+		return nil
+	}
+
+	rs := s.db.Command("HMSET", params...)
 	if !rs.IsOK() {
 		return rs.Error()
 	}
 
-	if feedurl != "" {
+	if feedurl, exists := values["feedurl"]; exists && feedurl != "" {
+		// TODO: remove pid if feedurl is empty
 		rs := s.db.Command("SADD", FEED_DRIVEN_PROFILES, pid)
 		if !rs.IsOK() {
 			return rs.Error()
 		}
 	}
-	if parentpid != "" {
+
+	if parentpid, exists := values["parentpid"]; exists && parentpid != "" {
 		rs := s.db.Command("SADD", feedsKey(parentpid), pid)
 		if !rs.IsOK() {
 			return rs.Error()
@@ -468,16 +482,6 @@ func (s *RedisStore) TimelineRange(pid string, status string, ts time.Time, befo
 
 			item.Added = item.Added / 1000000000
 			item.Event = item.Event / 1000000000
-
-			// if ordering == ORDERING_ETS {
-			// 	item.Date = item.Ets.Format("Jan 2006")
-			// 	item.Time = item.Ets.Format("Mon _2 15:04")
-			// 	item.Ms = item.Ets.UnixNano() / 1000000
-			// } else {
-			// item.Date = item.Ts.Format("Jan 2006")
-			// item.Time = item.Ts.Format("Mon _2 15:04")
-			// item.Ms = item.Ts.UnixNano() / 1000000
-			// }
 
 			items = append(items, item)
 		}

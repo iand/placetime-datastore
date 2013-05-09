@@ -9,6 +9,7 @@ type Profile struct {
 	Name           string    `json:"pname,omitempty"`
 	PasswordHash   []byte    `json:"-"`
 	Bio            string    `json:"bio,omitempty"`
+	Email          string    `json:"email,omitempty"`
 	Joined         time.Time `json:"joined"`
 	PossiblyCount  int       `json:"pcount"`
 	MaybeCount     int       `json:"mcount"`
