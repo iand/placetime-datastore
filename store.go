@@ -21,7 +21,6 @@ const (
 	MaxInt               = int(^uint(0) >> 1)
 
 	ORDERING_TS = "ts"
-	//ORDERING_ETS = "ets"
 
 	EVENTED_ITEM_PREFIX = '+'
 )
@@ -219,13 +218,13 @@ func (s *RedisStore) Profile(pid string) (*Profile, error) {
 	return &p, nil
 }
 
-func (s *RedisStore) AddProfile(pid string, password string, pname string, bio string, feedurl string, parentpid string) error {
+func (s *RedisStore) AddProfile(pid string, password string, pname string, bio string, feedurl string, parentpid string, email string) error {
 	pwdhash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return err
 	}
 
-	rs := s.db.Command("HMSET", profileKey(pid), "name", pname, "bio", bio, "feedurl", feedurl, "pwdhash", pwdhash, "parentpid", parentpid)
+	rs := s.db.Command("HMSET", profileKey(pid), "name", pname, "bio", bio, "feedurl", feedurl, "pwdhash", pwdhash, "parentpid", parentpid, "email", email)
 
 	if !rs.IsOK() {
 		return rs.Error()
@@ -388,9 +387,8 @@ func (s *RedisStore) FeedDrivenProfiles() ([]*Profile, error) {
 	for _, pid := range vals {
 		profile, err := s.Profile(pid)
 		if err != nil {
-			// TODO: log
-		} else {
-
+			log.Printf("Unable to read profile %s from store: %s", pid, err.Error())
+			continue
 		}
 		profiles = append(profiles, profile)
 	}
@@ -887,22 +885,24 @@ func (s *RedisStore) Feeds(pid string) ([]*Profile, error) {
 func (s *RedisStore) GrabItemsNeedingImages(max int) ([]*Item, error) {
 	items := make([]*Item, 0)
 
-	for i := 0; i < max; i++ {
+	if s.KeyExists(ITEMS_NEEDING_IMAGES) {
 
-		rs := s.db.Command("SRANDMEMBER", ITEMS_NEEDING_IMAGES)
-		if !rs.IsOK() {
-			return items, rs.Error()
-		}
+		for i := 0; i < max; i++ {
 
-		itemid := rs.ValueAsString()
+			rs := s.db.Command("SRANDMEMBER", ITEMS_NEEDING_IMAGES)
+			if !rs.IsOK() {
+				return items, rs.Error()
+			}
 
-		s.db.Command("SREM", ITEMS_NEEDING_IMAGES, itemid)
-		item, err := s.Item(itemid)
-		if err == nil {
-			items = append(items, item)
+			itemid := rs.ValueAsString()
+
+			s.db.Command("SREM", ITEMS_NEEDING_IMAGES, itemid)
+			item, err := s.Item(itemid)
+			if err == nil {
+				items = append(items, item)
+			}
 		}
 	}
-
 	return items, nil
 }
 
@@ -910,11 +910,17 @@ func (s *RedisStore) FindProfilesBySubstring(srch string) ([]*Profile, error) {
 
 	profiles := make([]*Profile, 0)
 
-	// Bail if the search contains non alphanumerics
-	allgood, _ := regexp.MatchString("^[a-zA-Z0-9]+$", srch)
-	if !allgood {
-		log.Printf("Invalid search string supplied: %s", srch)
-		return profiles, nil
+	// Ful wildcard is an exception
+	if srch == "*" {
+		srch = ""
+	} else {
+		// Bail if the search contains non alphanumerics
+		allgood, _ := regexp.MatchString("^[a-zA-Z0-9]+$", srch)
+		if !allgood {
+
+			log.Printf("Invalid search string supplied: %s", srch)
+			return profiles, nil
+		}
 	}
 
 	searchKey := fmt.Sprintf("*%s*:info", srch)
@@ -936,4 +942,27 @@ func (s *RedisStore) FindProfilesBySubstring(srch string) ([]*Profile, error) {
 
 	return profiles, nil
 
+}
+
+func (s *RedisStore) DumpKeys(pattern string) {
+	rs := s.db.Command("KEYS", pattern)
+	if !rs.IsOK() {
+		log.Printf("Error dumping keys: %s", rs.Error().Error())
+		return
+	}
+
+	for _, v := range rs.ValuesAsStrings() {
+		log.Printf("Key: ->%s<-", v)
+	}
+}
+
+func (s *RedisStore) KeyExists(key string) bool {
+	rs := s.db.Command("EXISTS", key)
+	if !rs.IsOK() {
+		log.Printf("Unexpected error checking if key exists: %s", rs.Error().Error())
+		return false
+	}
+
+	val, _ := rs.ValueAsBool()
+	return val
 }
