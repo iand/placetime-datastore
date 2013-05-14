@@ -914,8 +914,8 @@ func (s *RedisStore) FindProfilesBySubstring(srch string) ([]*Profile, error) {
 	if srch == "*" {
 		srch = ""
 	} else {
-		// Bail if the search contains non alphanumerics
-		allgood, _ := regexp.MatchString("^[a-zA-Z0-9]+$", srch)
+		// Bail if the search contains non alphanumerics or @
+		allgood, _ := regexp.MatchString("^[a-zA-Z0-9@]+$", srch)
 		if !allgood {
 
 			log.Printf("Invalid search string supplied: %s", srch)
