@@ -26,27 +26,66 @@ const (
 )
 
 var (
-	thedb *redis.Database
+	// Contains all profiles and meta stuff
+	profiledb *redis.Database
+
+	// Contains all timelines
+	timelinedb *redis.Database
+
+	// Contains all items
+	itemdb *redis.Database
+
+	// Contains session information
+	sessiondb *redis.Database
 
 	ProfileProperties = []string{"name", "feedurl", "bio", "email", "parentpid"}
 )
 
 func NewRedisStore() *RedisStore {
-	if thedb == nil {
-		thedb = redis.Connect(redis.Configuration{
+	if timelinedb == nil {
+		timelinedb = redis.Connect(redis.Configuration{
 			Database: 0,
 			Timeout:  10 * time.Second,
-			PoolSize: 60,
+			PoolSize: 20,
+		})
+	}
+
+	if itemdb == nil {
+		itemdb = redis.Connect(redis.Configuration{
+			Database: 0,
+			Timeout:  10 * time.Second,
+			PoolSize: 20,
+		})
+	}
+
+	if profiledb == nil {
+		profiledb = redis.Connect(redis.Configuration{
+			Database: 0,
+			Timeout:  10 * time.Second,
+			PoolSize: 20,
+		})
+	}
+	if sessiondb == nil {
+		sessiondb = redis.Connect(redis.Configuration{
+			Database: 0,
+			Timeout:  10 * time.Second,
+			PoolSize: 20,
 		})
 	}
 
 	return &RedisStore{
-		db: thedb,
+		tdb: timelinedb,
+		idb: itemdb,
+		pdb: profiledb,
+		sdb: sessiondb,
 	}
 }
 
 type RedisStore struct {
-	db *redis.Database
+	tdb *redis.Database
+	idb *redis.Database
+	pdb *redis.Database
+	sdb *redis.Database
 }
 
 func itemScore(t time.Time) float64 {
@@ -124,7 +163,7 @@ func (s *RedisStore) Close() {
 }
 
 func (s *RedisStore) SuggestedProfiles(loc string) ([]*Profile, error) {
-	rs := s.db.Command("SMEMBERS", suggestedProfileKey(loc))
+	rs := s.pdb.Command("SMEMBERS", suggestedProfileKey(loc))
 	if !rs.IsOK() {
 		return nil, rs.Error()
 	}
@@ -147,7 +186,7 @@ func (s *RedisStore) SuggestedProfiles(loc string) ([]*Profile, error) {
 }
 
 func (s *RedisStore) AddSuggestedProfile(pid string, loc string) error {
-	rs := s.db.Command("SADD", suggestedProfileKey(loc), pid)
+	rs := s.pdb.Command("SADD", suggestedProfileKey(loc), pid)
 	if !rs.IsOK() {
 		return rs.Error()
 	}
@@ -156,7 +195,7 @@ func (s *RedisStore) AddSuggestedProfile(pid string, loc string) error {
 }
 
 func (s *RedisStore) RemoveSuggestedProfile(pid string, loc string) error {
-	rs := s.db.Command("SREM", suggestedProfileKey(loc), pid)
+	rs := s.pdb.Command("SREM", suggestedProfileKey(loc), pid)
 	if !rs.IsOK() {
 		return rs.Error()
 	}
@@ -165,7 +204,7 @@ func (s *RedisStore) RemoveSuggestedProfile(pid string, loc string) error {
 }
 
 func (s *RedisStore) ProfileExists(pid string) (bool, error) {
-	rs := s.db.Command("EXISTS", profileKey(pid))
+	rs := s.pdb.Command("EXISTS", profileKey(pid))
 	if !rs.IsOK() {
 		return false, rs.Error()
 	}
@@ -175,7 +214,7 @@ func (s *RedisStore) ProfileExists(pid string) (bool, error) {
 }
 
 func (s *RedisStore) Profile(pid string) (*Profile, error) {
-	rs := s.db.Command("HMGET", profileKey(pid), "name", "bio", "feedurl", "parentpid", "email")
+	rs := s.pdb.Command("HMGET", profileKey(pid), "name", "bio", "feedurl", "parentpid", "email")
 	if !rs.IsOK() {
 		return nil, rs.Error()
 	}
@@ -190,27 +229,27 @@ func (s *RedisStore) Profile(pid string) (*Profile, error) {
 		Email:     vals[4],
 	}
 
-	rs = s.db.Command("ZCARD", possiblyKey(pid, ORDERING_TS))
+	rs = s.pdb.Command("ZCARD", possiblyKey(pid, ORDERING_TS))
 	if rs.IsOK() {
 		p.PossiblyCount, _ = rs.ValueAsInt()
 	}
 
-	rs = s.db.Command("ZCARD", maybeKey(pid, ORDERING_TS))
+	rs = s.pdb.Command("ZCARD", maybeKey(pid, ORDERING_TS))
 	if rs.IsOK() {
 		p.MaybeCount, _ = rs.ValueAsInt()
 	}
 
-	rs = s.db.Command("ZCARD", followingKey(pid))
+	rs = s.pdb.Command("ZCARD", followingKey(pid))
 	if rs.IsOK() {
 		p.FollowingCount, _ = rs.ValueAsInt()
 	}
 
-	rs = s.db.Command("ZCARD", followersKey(pid))
+	rs = s.pdb.Command("ZCARD", followersKey(pid))
 	if rs.IsOK() {
 		p.FollowerCount, _ = rs.ValueAsInt()
 	}
 
-	rs = s.db.Command("SCARD", feedsKey(pid))
+	rs = s.pdb.Command("SCARD", feedsKey(pid))
 	if rs.IsOK() {
 		p.FeedCount, _ = rs.ValueAsInt()
 	}
@@ -224,20 +263,20 @@ func (s *RedisStore) AddProfile(pid string, password string, pname string, bio s
 		return err
 	}
 
-	rs := s.db.Command("HMSET", profileKey(pid), "name", pname, "bio", bio, "feedurl", feedurl, "pwdhash", pwdhash, "parentpid", parentpid, "email", email)
+	rs := s.pdb.Command("HMSET", profileKey(pid), "name", pname, "bio", bio, "feedurl", feedurl, "pwdhash", pwdhash, "parentpid", parentpid, "email", email)
 
 	if !rs.IsOK() {
 		return rs.Error()
 	}
 
 	if feedurl != "" {
-		rs := s.db.Command("SADD", FEED_DRIVEN_PROFILES, pid)
+		rs := s.pdb.Command("SADD", FEED_DRIVEN_PROFILES, pid)
 		if !rs.IsOK() {
 			return rs.Error()
 		}
 	}
 	if parentpid != "" {
-		rs := s.db.Command("SADD", feedsKey(parentpid), pid)
+		rs := s.pdb.Command("SADD", feedsKey(parentpid), pid)
 		if !rs.IsOK() {
 			return rs.Error()
 		}
@@ -258,21 +297,21 @@ func (s *RedisStore) UpdateProfile(pid string, values map[string]string) error {
 		return nil
 	}
 
-	rs := s.db.Command("HMSET", params...)
+	rs := s.pdb.Command("HMSET", params...)
 	if !rs.IsOK() {
 		return rs.Error()
 	}
 
 	if feedurl, exists := values["feedurl"]; exists && feedurl != "" {
 		// TODO: remove pid if feedurl is empty
-		rs := s.db.Command("SADD", FEED_DRIVEN_PROFILES, pid)
+		rs := s.pdb.Command("SADD", FEED_DRIVEN_PROFILES, pid)
 		if !rs.IsOK() {
 			return rs.Error()
 		}
 	}
 
 	if parentpid, exists := values["parentpid"]; exists && parentpid != "" {
-		rs := s.db.Command("SADD", feedsKey(parentpid), pid)
+		rs := s.pdb.Command("SADD", feedsKey(parentpid), pid)
 		if !rs.IsOK() {
 			return rs.Error()
 		}
@@ -289,52 +328,52 @@ func (s *RedisStore) RemoveProfile(pid string) error {
 		return err
 	}
 
-	rs := s.db.Command("DEL", possiblyKey(pid, ORDERING_TS))
+	rs := s.pdb.Command("DEL", possiblyKey(pid, ORDERING_TS))
 	if !rs.IsOK() {
 		return rs.Error()
 	}
 
-	rs = s.db.Command("DEL", maybeKey(pid, ORDERING_TS))
+	rs = s.pdb.Command("DEL", maybeKey(pid, ORDERING_TS))
 	if !rs.IsOK() {
 		return rs.Error()
 	}
 
-	rs = s.db.Command("DEL", profileKey(pid))
+	rs = s.pdb.Command("DEL", profileKey(pid))
 	if !rs.IsOK() {
 		return rs.Error()
 	}
 
-	rs = s.db.Command("ZRANGE", followingKey(pid), 0, MaxInt)
+	rs = s.pdb.Command("ZRANGE", followingKey(pid), 0, MaxInt)
 	if !rs.IsOK() {
 		return rs.Error()
 	}
 
 	vals := rs.ValuesAsStrings()
 	for _, val := range vals {
-		rs = s.db.Command("ZREM", followersKey(val), pid)
+		rs = s.pdb.Command("ZREM", followersKey(val), pid)
 		if !rs.IsOK() {
 			return rs.Error()
 		}
 	}
 
-	rs = s.db.Command("DEL", followingKey(pid))
+	rs = s.pdb.Command("DEL", followingKey(pid))
 	if !rs.IsOK() {
 		return rs.Error()
 	}
 
-	rs = s.db.Command("SREM", FEED_DRIVEN_PROFILES, pid)
+	rs = s.pdb.Command("SREM", FEED_DRIVEN_PROFILES, pid)
 	if !rs.IsOK() {
 		return rs.Error()
 	}
 
 	if p.ParentPid != "" {
-		rs = s.db.Command("SREM", feedsKey(p.ParentPid), pid)
+		rs = s.pdb.Command("SREM", feedsKey(p.ParentPid), pid)
 		if !rs.IsOK() {
 			return rs.Error()
 		}
 	}
 
-	rs = s.db.Command("ZREM", FLAGGED_PROFILES, pid)
+	rs = s.pdb.Command("ZREM", FLAGGED_PROFILES, pid)
 	if !rs.IsOK() {
 		// OK TO IGNORE
 	}
@@ -344,7 +383,7 @@ func (s *RedisStore) RemoveProfile(pid string) error {
 
 func (s *RedisStore) FlagProfile(pid string) error {
 
-	rs := s.db.Command("ZINCRBY", FLAGGED_PROFILES, "1.0", pid)
+	rs := s.pdb.Command("ZINCRBY", FLAGGED_PROFILES, "1.0", pid)
 	if !rs.IsOK() {
 		return rs.Error()
 	}
@@ -353,7 +392,7 @@ func (s *RedisStore) FlagProfile(pid string) error {
 }
 
 func (s *RedisStore) FlaggedProfiles(start int, count int) ([]*ScoredProfile, error) {
-	rs := s.db.Command("ZRANGE", FLAGGED_PROFILES, start, start+count, "WITHSCORES")
+	rs := s.pdb.Command("ZRANGE", FLAGGED_PROFILES, start, start+count, "WITHSCORES")
 	if !rs.IsOK() {
 		return nil, rs.Error()
 	}
@@ -375,7 +414,7 @@ func (s *RedisStore) FlaggedProfiles(start int, count int) ([]*ScoredProfile, er
 }
 
 func (s *RedisStore) FeedDrivenProfiles() ([]*Profile, error) {
-	rs := s.db.Command("SMEMBERS", FEED_DRIVEN_PROFILES)
+	rs := s.pdb.Command("SMEMBERS", FEED_DRIVEN_PROFILES)
 	if !rs.IsOK() {
 		return nil, rs.Error()
 	}
@@ -412,7 +451,7 @@ func (s *RedisStore) TimelineRange(pid string, status string, ts time.Time, befo
 
 	if after > 0 {
 		// log.Print("ZRANGEBYSCORE", " ", key, " ", score, " ", "+Inf", " ", "WITHSCORES", " ", "LIMIT", " ", 0, " ", after+1)
-		rs := s.db.Command("ZRANGEBYSCORE", key, score, "+Inf", "WITHSCORES", "LIMIT", 0, after)
+		rs := s.tdb.Command("ZRANGEBYSCORE", key, score, "+Inf", "WITHSCORES", "LIMIT", 0, after)
 		if !rs.IsOK() {
 			return nil, rs.Error()
 		}
@@ -435,7 +474,7 @@ func (s *RedisStore) TimelineRange(pid string, status string, ts time.Time, befo
 	formattedScore := fmt.Sprintf("%s%f", delim, score)
 
 	// log.Print("ZREVRANGEBYSCORE", " ", key, " ", formattedScore, " ", "-Inf", " ", "WITHSCORES", " ", "LIMIT", " ", 0, " ", before)
-	rs := s.db.Command("ZREVRANGEBYSCORE", key, formattedScore, "-Inf", "WITHSCORES", "LIMIT", 0, before+1)
+	rs := s.tdb.Command("ZREVRANGEBYSCORE", key, formattedScore, "-Inf", "WITHSCORES", "LIMIT", 0, before+1)
 	if !rs.IsOK() {
 		return nil, rs.Error()
 	}
@@ -457,7 +496,7 @@ func (s *RedisStore) TimelineRange(pid string, status string, ts time.Time, befo
 			key = key[1:]
 		}
 
-		rs = s.db.Command("GET", key)
+		rs = s.idb.Command("GET", key)
 		if !rs.IsOK() {
 			log.Printf("Could not get key %s from db: %s", key, rs.Error().Error())
 			continue
@@ -490,7 +529,7 @@ func (s *RedisStore) TimelineRange(pid string, status string, ts time.Time, befo
 func (s *RedisStore) Item(id string) (*Item, error) {
 	itemKey := itemKey(id)
 
-	rs := s.db.Command("GET", itemKey)
+	rs := s.idb.Command("GET", itemKey)
 	if !rs.IsOK() {
 		return nil, rs.Error()
 	}
@@ -504,7 +543,7 @@ func (s *RedisStore) Item(id string) (*Item, error) {
 func (s *RedisStore) AddItem(pid string, ets time.Time, text string, link string, image string, itemid string) (string, error) {
 
 	if itemid == "" {
-		rs := s.db.Command("INCR", itemSeqKey(pid))
+		rs := s.idb.Command("INCR", itemSeqKey(pid))
 		if !rs.IsOK() {
 			return "", rs.Error()
 		}
@@ -546,36 +585,36 @@ func (s *RedisStore) AddItem(pid string, ets time.Time, text string, link string
 		return itemKey, err
 	}
 
-	rs := s.db.Command("SET", itemKey, json)
+	rs := s.idb.Command("SET", itemKey, json)
 	if !rs.IsOK() {
 		return "", rs.Error()
 	}
 
-	rs = s.db.Command("ZADD", maybeKey(pid, ORDERING_TS), item.Added, itemKey)
+	rs = s.tdb.Command("ZADD", maybeKey(pid, ORDERING_TS), item.Added, itemKey)
 	if !rs.IsOK() {
 		return itemKey, rs.Error()
 	}
 
 	if isEvent {
-		rs = s.db.Command("ZADD", maybeKey(pid, ORDERING_TS), item.Event, eventedItemKey)
+		rs = s.tdb.Command("ZADD", maybeKey(pid, ORDERING_TS), item.Event, eventedItemKey)
 		if !rs.IsOK() {
 			return itemKey, rs.Error()
 		}
 	}
 
-	rs = s.db.Command("ZRANGE", followersKey(pid), 0, MaxInt)
+	rs = s.pdb.Command("ZRANGE", followersKey(pid), 0, MaxInt)
 	if !rs.IsOK() {
 		return itemKey, rs.Error()
 	}
 
 	for _, followerpid := range rs.ValuesAsStrings() {
-		rs = s.db.Command("ZADD", possiblyKey(followerpid, ORDERING_TS), item.Added, itemKey)
+		rs = s.tdb.Command("ZADD", possiblyKey(followerpid, ORDERING_TS), item.Added, itemKey)
 		if !rs.IsOK() {
 			return itemKey, rs.Error()
 		}
 
 		if isEvent {
-			rs = s.db.Command("ZADD", possiblyKey(followerpid, ORDERING_TS), item.Event, eventedItemKey)
+			rs = s.tdb.Command("ZADD", possiblyKey(followerpid, ORDERING_TS), item.Event, eventedItemKey)
 			if !rs.IsOK() {
 				return itemKey, rs.Error()
 			}
@@ -583,7 +622,7 @@ func (s *RedisStore) AddItem(pid string, ets time.Time, text string, link string
 	}
 
 	if item.Link != "" && item.Image == "" {
-		rs := s.db.Command("SADD", ITEMS_NEEDING_IMAGES, itemid)
+		rs := s.pdb.Command("SADD", ITEMS_NEEDING_IMAGES, itemid)
 		if !rs.IsOK() {
 			return itemKey, rs.Error()
 		}
@@ -593,7 +632,7 @@ func (s *RedisStore) AddItem(pid string, ets time.Time, text string, link string
 }
 
 func (s *RedisStore) ItemExists(id string) (bool, error) {
-	rs := s.db.Command("EXISTS", itemKey(id))
+	rs := s.idb.Command("EXISTS", itemKey(id))
 	if !rs.IsOK() {
 		return false, rs.Error()
 	}
@@ -610,7 +649,7 @@ func (s *RedisStore) UpdateItem(item *Item) error {
 		return err
 	}
 
-	rs := s.db.Command("SET", itemKey, json)
+	rs := s.idb.Command("SET", itemKey, json)
 	if !rs.IsOK() {
 		return rs.Error()
 	}
@@ -619,7 +658,7 @@ func (s *RedisStore) UpdateItem(item *Item) error {
 }
 
 func (s *RedisStore) DeleteMaybeItems(pid string) error {
-	rs := s.db.Command("DEL", maybeKey(pid, ORDERING_TS))
+	rs := s.tdb.Command("DEL", maybeKey(pid, ORDERING_TS))
 	if !rs.IsOK() {
 		return rs.Error()
 	}
@@ -628,22 +667,38 @@ func (s *RedisStore) DeleteMaybeItems(pid string) error {
 }
 
 func (s *RedisStore) ResetAll() error {
-	rs := s.db.Command("FLUSHDB")
+	rs := s.pdb.Command("FLUSHDB")
 	if !rs.IsOK() {
 		return rs.Error()
 	}
+
+	rs = s.tdb.Command("FLUSHDB")
+	if !rs.IsOK() {
+		return rs.Error()
+	}
+
+	rs = s.idb.Command("FLUSHDB")
+	if !rs.IsOK() {
+		return rs.Error()
+	}
+
+	rs = s.sdb.Command("FLUSHDB")
+	if !rs.IsOK() {
+		return rs.Error()
+	}
+
 	return nil
 }
 
 func (s *RedisStore) Follow(pid string, followpid string) error {
 	score := followerScore(time.Now())
 
-	rs := s.db.Command("ZADD", followingKey(pid), score, followpid)
+	rs := s.pdb.Command("ZADD", followingKey(pid), score, followpid)
 	if !rs.IsOK() {
 		return rs.Error()
 	}
 
-	rs = s.db.Command("ZADD", followersKey(followpid), score, pid)
+	rs = s.pdb.Command("ZADD", followersKey(followpid), score, pid)
 	if !rs.IsOK() {
 		return rs.Error()
 	}
@@ -651,7 +706,7 @@ func (s *RedisStore) Follow(pid string, followpid string) error {
 	poss_ts := possiblyKey(pid, ORDERING_TS)
 	maybe_ts := maybeKey(followpid, ORDERING_TS)
 
-	rs = s.db.Command("ZUNIONSTORE", poss_ts, 2, poss_ts, maybe_ts, "WEIGHTS", 1.0, 1.0, "AGGREGATE", "MAX")
+	rs = s.tdb.Command("ZUNIONSTORE", poss_ts, 2, poss_ts, maybe_ts, "WEIGHTS", 1.0, 1.0, "AGGREGATE", "MAX")
 	if !rs.IsOK() {
 		return rs.Error()
 	}
@@ -661,17 +716,17 @@ func (s *RedisStore) Follow(pid string, followpid string) error {
 
 func (s *RedisStore) Unfollow(pid string, followpid string) error {
 
-	rs := s.db.Command("ZREM", followingKey(pid), followpid)
+	rs := s.pdb.Command("ZREM", followingKey(pid), followpid)
 	if !rs.IsOK() {
 		return rs.Error()
 	}
 
-	rs = s.db.Command("ZREM", followersKey(followpid), pid)
+	rs = s.pdb.Command("ZREM", followersKey(followpid), pid)
 	if !rs.IsOK() {
 		return rs.Error()
 	}
 
-	rs = s.db.Command("ZRANGE", maybeKey(followpid, ORDERING_TS), 0, MaxInt)
+	rs = s.tdb.Command("ZRANGE", maybeKey(followpid, ORDERING_TS), 0, MaxInt)
 	if !rs.IsOK() {
 		return rs.Error()
 	}
@@ -679,7 +734,7 @@ func (s *RedisStore) Unfollow(pid string, followpid string) error {
 	poss_ts := possiblyKey(pid, ORDERING_TS)
 	items := rs.ValuesAsStrings()
 	for _, item := range items {
-		s.db.Command("ZREM", poss_ts, item)
+		s.tdb.Command("ZREM", poss_ts, item)
 	}
 
 	return nil
@@ -692,14 +747,14 @@ func (s *RedisStore) Promote(pid string, id string) error {
 
 	itemKey := itemKey(id)
 
-	rs := s.db.Command("ZREM", poss_key, itemKey)
+	rs := s.tdb.Command("ZREM", poss_key, itemKey)
 	if !rs.IsOK() {
 		// Ignore error
 	}
 
 	eventedItemKey := eventedItemKey(id)
 
-	rs = s.db.Command("ZREM", poss_key, eventedItemKey)
+	rs = s.tdb.Command("ZREM", poss_key, eventedItemKey)
 	if !rs.IsOK() {
 		// Ignore error
 	}
@@ -707,7 +762,7 @@ func (s *RedisStore) Promote(pid string, id string) error {
 	tsnano := time.Now().UnixNano()
 	maybe_key := maybeKey(pid, ORDERING_TS)
 
-	rs = s.db.Command("ZADD", maybe_key, tsnano, itemKey)
+	rs = s.tdb.Command("ZADD", maybe_key, tsnano, itemKey)
 	if !rs.IsOK() {
 		return rs.Error()
 	}
@@ -718,7 +773,7 @@ func (s *RedisStore) Promote(pid string, id string) error {
 	}
 
 	if item.Event > 0 {
-		rs = s.db.Command("ZADD", maybe_key, item.Event, eventedItemKey)
+		rs = s.tdb.Command("ZADD", maybe_key, item.Event, eventedItemKey)
 		if !rs.IsOK() {
 			return rs.Error()
 		}
@@ -738,12 +793,12 @@ func (s *RedisStore) Demote(pid string, id string) error {
 
 	maybe_key := maybeKey(pid, ORDERING_TS)
 
-	rs := s.db.Command("ZREM", maybe_key, itemKey)
+	rs := s.tdb.Command("ZREM", maybe_key, itemKey)
 	if !rs.IsOK() {
 		return rs.Error()
 	}
 
-	rs = s.db.Command("ZREM", maybe_key, eventedItemKey)
+	rs = s.tdb.Command("ZREM", maybe_key, eventedItemKey)
 	if !rs.IsOK() {
 		return rs.Error()
 	}
@@ -753,7 +808,7 @@ func (s *RedisStore) Demote(pid string, id string) error {
 	tsnano := time.Now().UnixNano()
 	poss_key := possiblyKey(pid, ORDERING_TS)
 
-	rs = s.db.Command("ZADD", poss_key, tsnano, itemKey)
+	rs = s.tdb.Command("ZADD", poss_key, tsnano, itemKey)
 	if !rs.IsOK() {
 		return rs.Error()
 	}
@@ -764,7 +819,7 @@ func (s *RedisStore) Demote(pid string, id string) error {
 	}
 
 	if item.Event > 0 {
-		rs = s.db.Command("ZADD", poss_key, item.Event, eventedItemKey)
+		rs = s.tdb.Command("ZADD", poss_key, item.Event, eventedItemKey)
 		if !rs.IsOK() {
 			return rs.Error()
 		}
@@ -775,7 +830,7 @@ func (s *RedisStore) Demote(pid string, id string) error {
 }
 
 func (s *RedisStore) Followers(pid string, count int, start int) ([]*Profile, error) {
-	rs := s.db.Command("ZRANGE", followersKey(pid), start, start+count)
+	rs := s.pdb.Command("ZRANGE", followersKey(pid), start, start+count)
 	if !rs.IsOK() {
 		return nil, rs.Error()
 	}
@@ -799,7 +854,7 @@ func (s *RedisStore) Followers(pid string, count int, start int) ([]*Profile, er
 }
 
 func (s *RedisStore) Following(pid string, count int, start int) ([]*Profile, error) {
-	rs := s.db.Command("ZRANGE", followingKey(pid), start, start+count)
+	rs := s.pdb.Command("ZRANGE", followingKey(pid), start, start+count)
 	if !rs.IsOK() {
 		return nil, rs.Error()
 	}
@@ -823,7 +878,7 @@ func (s *RedisStore) Following(pid string, count int, start int) ([]*Profile, er
 }
 
 func (s *RedisStore) VerifyPassword(pid string, password string) (bool, error) {
-	rs := s.db.Command("HGET", profileKey(pid), "pwdhash")
+	rs := s.pdb.Command("HGET", profileKey(pid), "pwdhash")
 	if !rs.IsOK() {
 		return false, rs.Error()
 	}
@@ -840,7 +895,7 @@ func (s *RedisStore) VerifyPassword(pid string, password string) (bool, error) {
 
 func (s *RedisStore) SessionId(pid string) (int64, error) {
 	sessionId := rand.Int63()
-	rs := s.db.Command("SET", sessionKey(sessionId), pid)
+	rs := s.sdb.Command("SET", sessionKey(sessionId), pid)
 	if !rs.IsOK() {
 		return 0, rs.Error()
 	}
@@ -849,7 +904,7 @@ func (s *RedisStore) SessionId(pid string) (int64, error) {
 }
 
 func (s *RedisStore) ValidSession(pid string, sessionId int64) (bool, error) {
-	rs := s.db.Command("GET", sessionKey(sessionId))
+	rs := s.sdb.Command("GET", sessionKey(sessionId))
 	if !rs.IsOK() {
 		return false, rs.Error()
 	}
@@ -859,7 +914,7 @@ func (s *RedisStore) ValidSession(pid string, sessionId int64) (bool, error) {
 }
 
 func (s *RedisStore) Feeds(pid string) ([]*Profile, error) {
-	rs := s.db.Command("SMEMBERS", feedsKey(pid))
+	rs := s.pdb.Command("SMEMBERS", feedsKey(pid))
 	if !rs.IsOK() {
 		return nil, rs.Error()
 	}
@@ -885,18 +940,18 @@ func (s *RedisStore) Feeds(pid string) ([]*Profile, error) {
 func (s *RedisStore) GrabItemsNeedingImages(max int) ([]*Item, error) {
 	items := make([]*Item, 0)
 
-	if s.KeyExists(ITEMS_NEEDING_IMAGES) {
+	if keyExists(s.pdb, ITEMS_NEEDING_IMAGES) {
 
 		for i := 0; i < max; i++ {
 
-			rs := s.db.Command("SRANDMEMBER", ITEMS_NEEDING_IMAGES)
+			rs := s.pdb.Command("SRANDMEMBER", ITEMS_NEEDING_IMAGES)
 			if !rs.IsOK() {
 				return items, rs.Error()
 			}
 
 			itemid := rs.ValueAsString()
 
-			s.db.Command("SREM", ITEMS_NEEDING_IMAGES, itemid)
+			s.pdb.Command("SREM", ITEMS_NEEDING_IMAGES, itemid)
 			item, err := s.Item(itemid)
 			if err == nil {
 				items = append(items, item)
@@ -924,7 +979,7 @@ func (s *RedisStore) FindProfilesBySubstring(srch string) ([]*Profile, error) {
 	}
 
 	searchKey := fmt.Sprintf("*%s*:info", srch)
-	rs := s.db.Command("KEYS", searchKey)
+	rs := s.pdb.Command("KEYS", searchKey)
 	if !rs.IsOK() {
 		return nil, rs.Error()
 	}
@@ -944,8 +999,8 @@ func (s *RedisStore) FindProfilesBySubstring(srch string) ([]*Profile, error) {
 
 }
 
-func (s *RedisStore) DumpKeys(pattern string) {
-	rs := s.db.Command("KEYS", pattern)
+func dumpKeys(db *redis.Database, pattern string) {
+	rs := db.Command("KEYS", pattern)
 	if !rs.IsOK() {
 		log.Printf("Error dumping keys: %s", rs.Error().Error())
 		return
@@ -956,8 +1011,8 @@ func (s *RedisStore) DumpKeys(pattern string) {
 	}
 }
 
-func (s *RedisStore) KeyExists(key string) bool {
-	rs := s.db.Command("EXISTS", key)
+func keyExists(db *redis.Database, key string) bool {
+	rs := db.Command("EXISTS", key)
 	if !rs.IsOK() {
 		log.Printf("Unexpected error checking if key exists: %s", rs.Error().Error())
 		return false
