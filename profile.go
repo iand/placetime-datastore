@@ -6,7 +6,7 @@ import (
 
 type Profile struct {
 	Pid            string    `json:"pid"`
-	Name           string    `json:"pname,omitempty"`
+	Name           string    `json:"name,omitempty"`
 	PasswordHash   []byte    `json:"-"`
 	Bio            string    `json:"bio,omitempty"`
 	Email          string    `json:"email,omitempty"`
