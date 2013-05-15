@@ -42,33 +42,39 @@ var (
 )
 
 func NewRedisStore() *RedisStore {
-	if timelinedb == nil {
-		timelinedb = redis.Connect(redis.Configuration{
+	if profiledb == nil {
+		profiledb = redis.Connect(redis.Configuration{
 			Database: 0,
 			Timeout:  10 * time.Second,
+			Address:  "localhost:6379",
+			PoolSize: 20,
+		})
+	}
+
+	if timelinedb == nil {
+		timelinedb = redis.Connect(redis.Configuration{
+			Database: 1,
+			Timeout:  10 * time.Second,
+			Address:  "localhost:6379",
 			PoolSize: 20,
 		})
 	}
 
 	if itemdb == nil {
 		itemdb = redis.Connect(redis.Configuration{
-			Database: 0,
+			Database: 2,
 			Timeout:  10 * time.Second,
+			Address:  "localhost:6379",
+
 			PoolSize: 20,
 		})
 	}
 
-	if profiledb == nil {
-		profiledb = redis.Connect(redis.Configuration{
-			Database: 0,
-			Timeout:  10 * time.Second,
-			PoolSize: 20,
-		})
-	}
 	if sessiondb == nil {
 		sessiondb = redis.Connect(redis.Configuration{
-			Database: 0,
+			Database: 3,
 			Timeout:  10 * time.Second,
+			Address:  "localhost:6379",
 			PoolSize: 20,
 		})
 	}
