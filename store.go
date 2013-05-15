@@ -26,65 +26,61 @@ const (
 )
 
 var (
-	// Contains all profiles and meta stuff
-	profiledb *redis.Database
-
-	// Contains all timelines
-	timelinedb *redis.Database
-
-	// Contains all items
-	itemdb *redis.Database
-
-	// Contains session information
-	sessiondb *redis.Database
-
+	store             *RedisStore
 	ProfileProperties = []string{"name", "feedurl", "bio", "email", "parentpid"}
 )
 
-func NewRedisStore() *RedisStore {
-	if profiledb == nil {
-		profiledb = redis.Connect(redis.Configuration{
-			Database: 0,
-			Timeout:  10 * time.Second,
-			Address:  "localhost:6379",
-			PoolSize: 20,
-		})
-	}
+func InitRedisStore(config Config) {
+	// Contains all profiles and meta stuff
+	profiledb := redis.Connect(redis.Configuration{
+		Database: config.Profile.Database,
+		Address:  config.Profile.Address,
+		PoolSize: config.Profile.PoolSize,
+		Timeout:  10 * time.Second,
+	})
 
-	if timelinedb == nil {
-		timelinedb = redis.Connect(redis.Configuration{
-			Database: 1,
-			Timeout:  10 * time.Second,
-			Address:  "localhost:6379",
-			PoolSize: 20,
-		})
-	}
+	// Contains all timelines
+	timelinedb := redis.Connect(redis.Configuration{
+		Database: config.Timeline.Database,
+		Address:  config.Timeline.Address,
+		PoolSize: config.Timeline.PoolSize,
+		Timeout:  10 * time.Second,
+	})
 
-	if itemdb == nil {
-		itemdb = redis.Connect(redis.Configuration{
-			Database: 2,
-			Timeout:  10 * time.Second,
-			Address:  "localhost:6379",
+	// Contains all items
+	itemdb := redis.Connect(redis.Configuration{
+		Database: config.Item.Database,
+		Address:  config.Item.Address,
+		PoolSize: config.Item.PoolSize,
+		Timeout:  10 * time.Second,
+	})
 
-			PoolSize: 20,
-		})
-	}
+	// Contains session information
+	sessiondb := redis.Connect(redis.Configuration{
+		Database: config.Session.Database,
+		Address:  config.Session.Address,
+		PoolSize: config.Session.PoolSize,
+		Timeout:  10 * time.Second,
+	})
 
-	if sessiondb == nil {
-		sessiondb = redis.Connect(redis.Configuration{
-			Database: 3,
-			Timeout:  10 * time.Second,
-			Address:  "localhost:6379",
-			PoolSize: 20,
-		})
-	}
+	log.Printf("Connecting to datastores")
+	log.Printf("Profile datastore: %s/%d", config.Profile.Address, config.Profile.Database)
+	log.Printf("Timeline datastore: %s/%d", config.Timeline.Address, config.Timeline.Database)
+	log.Printf("Item datastore: %s/%d", config.Item.Address, config.Item.Database)
+	log.Printf("Session datastore: %s/%d", config.Session.Address, config.Session.Database)
 
-	return &RedisStore{
+	store = &RedisStore{
 		tdb: timelinedb,
 		idb: itemdb,
 		pdb: profiledb,
 		sdb: sessiondb,
 	}
+
+}
+
+func NewRedisStore() *RedisStore {
+	return store
+
 }
 
 type RedisStore struct {
