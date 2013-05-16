@@ -1,6 +1,7 @@
 package datastore
 
 import (
+	"cgl.tideland.biz/applog"
 	"code.google.com/p/go.crypto/bcrypt"
 	"code.google.com/p/tcgl/redis"
 	"encoding/json"
@@ -63,11 +64,11 @@ func InitRedisStore(config Config) {
 		Timeout:  10 * time.Second,
 	})
 
-	log.Printf("Connecting to datastores")
-	log.Printf("Profile datastore: %s/%d", config.Profile.Address, config.Profile.Database)
-	log.Printf("Timeline datastore: %s/%d", config.Timeline.Address, config.Timeline.Database)
-	log.Printf("Item datastore: %s/%d", config.Item.Address, config.Item.Database)
-	log.Printf("Session datastore: %s/%d", config.Session.Address, config.Session.Database)
+	applog.Infof("Connecting to datastores")
+	applog.Infof("Profile datastore: %s/%d", config.Profile.Address, config.Profile.Database)
+	applog.Infof("Timeline datastore: %s/%d", config.Timeline.Address, config.Timeline.Database)
+	applog.Infof("Item datastore: %s/%d", config.Item.Address, config.Item.Database)
+	applog.Infof("Session datastore: %s/%d", config.Session.Address, config.Session.Database)
 
 	store = &RedisStore{
 		tdb: timelinedb,
@@ -149,7 +150,11 @@ func itemKey(itemid string) string {
 }
 
 func eventedItemKey(itemid string) string {
-	return fmt.Sprintf("%c%s", EVENTED_ITEM_PREFIX, itemKey(itemid))
+	return eventedItemKeyFromItemKey(itemKey(itemid))
+}
+
+func eventedItemKeyFromItemKey(itemKey string) string {
+	return fmt.Sprintf("%c%s", EVENTED_ITEM_PREFIX, itemKey)
 }
 
 func suggestedProfileKey(loc string) string {
@@ -158,6 +163,10 @@ func suggestedProfileKey(loc string) string {
 
 func sessionKey(num int64) string {
 	return fmt.Sprintf("session:%d", num)
+}
+
+func sourcesKey(pid string) string {
+	return fmt.Sprintf("%s:sources", pid)
 }
 
 func (s *RedisStore) Close() {
@@ -428,7 +437,7 @@ func (s *RedisStore) FeedDrivenProfiles() ([]*Profile, error) {
 	for _, pid := range vals {
 		profile, err := s.Profile(pid)
 		if err != nil {
-			log.Printf("Unable to read profile %s from store: %s", pid, err.Error())
+			applog.Errorf("Unable to read profile %s from store: %s", pid, err.Error())
 			continue
 		}
 		profiles = append(profiles, profile)
@@ -487,6 +496,7 @@ func (s *RedisStore) TimelineRange(pid string, status string, ts time.Time, befo
 		itemkeys = append(itemkeys, vals[i+1])
 	}
 
+	sourcesKey := sourcesKey(pid)
 	items := make([]*FormattedItem, 0)
 
 	for ik := 0; ik < len(itemkeys); ik += 2 {
@@ -500,7 +510,7 @@ func (s *RedisStore) TimelineRange(pid string, status string, ts time.Time, befo
 
 		rs = s.idb.Command("GET", key)
 		if !rs.IsOK() {
-			log.Printf("Could not get key %s from db: %s", key, rs.Error().Error())
+			applog.Errorf("Could not get key %s from db: %s", key, rs.Error().Error())
 			continue
 		}
 
@@ -512,7 +522,7 @@ func (s *RedisStore) TimelineRange(pid string, status string, ts time.Time, befo
 
 			f, err := strconv.ParseFloat(score, 64)
 			if err != nil {
-				log.Printf("Could not parse score from db as float: %s", err.Error())
+				applog.Errorf("Could not parse score from db as float: %s", err.Error())
 				continue
 
 			}
@@ -521,6 +531,13 @@ func (s *RedisStore) TimelineRange(pid string, status string, ts time.Time, befo
 
 			item.Added = item.Added / 1000000000
 			item.Event = item.Event / 1000000000
+
+			rs = s.tdb.Command("HGET", sourcesKey, key)
+			if !rs.IsOK() {
+				// Ignore
+			} else {
+				item.Source = rs.ValueAsString()
+			}
 
 			items = append(items, item)
 		}
@@ -562,14 +579,12 @@ func (s *RedisStore) AddItem(pid string, ets time.Time, text string, link string
 	}
 	tsnano := time.Now().UnixNano()
 
-	isEvent := false
 	etsnano := ets.UnixNano()
 
 	if etsnano > 0 {
 		// Fake the precision for event time
 		nanos := tsnano - 1000000000*(tsnano/1000000000)
 		etsnano = ets.Unix()*1000000000 + nanos
-		isEvent = true
 	}
 
 	item := &Item{
@@ -597,31 +612,14 @@ func (s *RedisStore) AddItem(pid string, ets time.Time, text string, link string
 		return itemKey, rs.Error()
 	}
 
-	if isEvent {
+	if item.IsEvent() {
 		rs = s.tdb.Command("ZADD", maybeKey(pid, ORDERING_TS), item.Event, eventedItemKey)
 		if !rs.IsOK() {
 			return itemKey, rs.Error()
 		}
 	}
 
-	rs = s.pdb.Command("ZRANGE", followersKey(pid), 0, MaxInt)
-	if !rs.IsOK() {
-		return itemKey, rs.Error()
-	}
-
-	for _, followerpid := range rs.ValuesAsStrings() {
-		rs = s.tdb.Command("ZADD", possiblyKey(followerpid, ORDERING_TS), item.Added, itemKey)
-		if !rs.IsOK() {
-			return itemKey, rs.Error()
-		}
-
-		if isEvent {
-			rs = s.tdb.Command("ZADD", possiblyKey(followerpid, ORDERING_TS), item.Event, eventedItemKey)
-			if !rs.IsOK() {
-				return itemKey, rs.Error()
-			}
-		}
-	}
+	s.AddItemToFollowerTimelines(pid, item.Added, item)
 
 	if item.Link != "" && item.Image == "" {
 		rs := s.pdb.Command("SADD", ITEMS_NEEDING_IMAGES, itemid)
@@ -692,6 +690,7 @@ func (s *RedisStore) ResetAll() error {
 	return nil
 }
 
+// Make pid follow followpid
 func (s *RedisStore) Follow(pid string, followpid string) error {
 	score := followerScore(time.Now())
 
@@ -705,17 +704,35 @@ func (s *RedisStore) Follow(pid string, followpid string) error {
 		return rs.Error()
 	}
 
-	poss_ts := possiblyKey(pid, ORDERING_TS)
-	maybe_ts := maybeKey(followpid, ORDERING_TS)
+	// Copy all of followpid's items into pid's timeline
+	// Slow but accurate method
 
-	rs = s.tdb.Command("ZUNIONSTORE", poss_ts, 2, poss_ts, maybe_ts, "WEIGHTS", 1.0, 1.0, "AGGREGATE", "MAX")
+	sourceTimelineKey := maybeKey(followpid, ORDERING_TS)
+	rs = s.tdb.Command("ZRANGEBYSCORE", sourceTimelineKey, 0, "+Inf", "WITHSCORES")
 	if !rs.IsOK() {
 		return rs.Error()
 	}
 
+	// 	get itemkey followed by score
+	vals := rs.ValuesAsStrings()
+	for ik := 0; ik < len(vals); ik += 2 {
+
+		itemKey := vals[ik]
+		score := vals[ik+1]
+
+		f, err := strconv.ParseFloat(score, 64)
+		if err != nil {
+			applog.Errorf("Could not parse score from db as float: %s", err.Error())
+			continue
+		}
+
+		ts := int64(f)
+		s.AddItemToTimeline(pid, followpid, ts, itemKey)
+	}
 	return nil
 }
 
+// Make pid stop following followpid
 func (s *RedisStore) Unfollow(pid string, followpid string) error {
 
 	rs := s.pdb.Command("ZREM", followingKey(pid), followpid)
@@ -728,43 +745,42 @@ func (s *RedisStore) Unfollow(pid string, followpid string) error {
 		return rs.Error()
 	}
 
-	rs = s.tdb.Command("ZRANGE", maybeKey(followpid, ORDERING_TS), 0, MaxInt)
+	// Remove all of followpid's items from pid's timeline
+	// Slow but accurate method
+
+	sourceTimelineKey := maybeKey(followpid, ORDERING_TS)
+	applog.Debugf("ZRANGEBYSCORE %s 0 +Inf", sourceTimelineKey)
+	rs = s.tdb.Command("ZRANGEBYSCORE", sourceTimelineKey, 0, "+Inf")
 	if !rs.IsOK() {
 		return rs.Error()
 	}
 
-	poss_ts := possiblyKey(pid, ORDERING_TS)
-	items := rs.ValuesAsStrings()
-	for _, item := range items {
-		s.tdb.Command("ZREM", poss_ts, item)
+	// 	get itemkey
+	for _, itemKey := range rs.ValuesAsStrings() {
+		applog.Debugf("Found itemkey %s", itemKey)
+		s.RemoveItemFromTimeline(pid, followpid, itemKey)
 	}
-
 	return nil
 }
 
 func (s *RedisStore) Promote(pid string, id string) error {
 
-	// TODO: abort if item is not in possibly timeline
-	poss_key := possiblyKey(pid, ORDERING_TS)
-
 	itemKey := itemKey(id)
 
-	rs := s.tdb.Command("ZREM", poss_key, itemKey)
-	if !rs.IsOK() {
-		// Ignore error
-	}
+	// rs := s.tdb.Command("ZREM", poss_key, itemKey)
+	// if !rs.IsOK() {
+	// 	// Ignore error
+	// }
 
-	eventedItemKey := eventedItemKey(id)
-
-	rs = s.tdb.Command("ZREM", poss_key, eventedItemKey)
-	if !rs.IsOK() {
-		// Ignore error
-	}
+	// rs = s.tdb.Command("ZREM", poss_key, eventedItemKey)
+	// if !rs.IsOK() {
+	// 	// Ignore error
+	// }
 
 	tsnano := time.Now().UnixNano()
 	maybe_key := maybeKey(pid, ORDERING_TS)
 
-	rs = s.tdb.Command("ZADD", maybe_key, tsnano, itemKey)
+	rs := s.tdb.Command("ZADD", maybe_key, tsnano, itemKey)
 	if !rs.IsOK() {
 		return rs.Error()
 	}
@@ -775,13 +791,14 @@ func (s *RedisStore) Promote(pid string, id string) error {
 	}
 
 	if item.Event > 0 {
+		eventedItemKey := eventedItemKey(id)
 		rs = s.tdb.Command("ZADD", maybe_key, item.Event, eventedItemKey)
 		if !rs.IsOK() {
 			return rs.Error()
 		}
 	}
 
-	// TODO: reflect this in follower timelines
+	s.AddItemToFollowerTimelines(pid, tsnano, item)
 
 	return nil
 
@@ -807,26 +824,26 @@ func (s *RedisStore) Demote(pid string, id string) error {
 
 	// TODO: don't add them here if they were manually added by the user
 
-	tsnano := time.Now().UnixNano()
-	poss_key := possiblyKey(pid, ORDERING_TS)
+	// tsnano := time.Now().UnixNano()
+	// poss_key := possiblyKey(pid, ORDERING_TS)
 
-	rs = s.tdb.Command("ZADD", poss_key, tsnano, itemKey)
-	if !rs.IsOK() {
-		return rs.Error()
-	}
+	// rs = s.tdb.Command("ZADD", poss_key, tsnano, itemKey)
+	// if !rs.IsOK() {
+	// 	return rs.Error()
+	// }
 
-	item, err := s.Item(id)
-	if err != nil {
-		return err
-	}
+	// item, err := s.Item(id)
+	// if err != nil {
+	// 	return err
+	// }
 
-	if item.Event > 0 {
-		rs = s.tdb.Command("ZADD", poss_key, item.Event, eventedItemKey)
-		if !rs.IsOK() {
-			return rs.Error()
-		}
-	}
-	// TODO: remove from follower timelines
+	// if item.Event > 0 {
+	// 	rs = s.tdb.Command("ZADD", poss_key, item.Event, eventedItemKey)
+	// 	if !rs.IsOK() {
+	// 		return rs.Error()
+	// 	}
+	// }
+	s.RemoveItemFromFollowerTimelines(pid, itemKey)
 
 	return nil
 }
@@ -847,8 +864,8 @@ func (s *RedisStore) Followers(pid string, count int, start int) ([]*Profile, er
 			// TODO: log
 		} else {
 
+			profiles = append(profiles, profile)
 		}
-		profiles = append(profiles, profile)
 	}
 
 	return profiles, nil
@@ -870,9 +887,9 @@ func (s *RedisStore) Following(pid string, count int, start int) ([]*Profile, er
 		if err != nil {
 			// TODO: log
 		} else {
-
+			profiles = append(profiles, profile)
 		}
-		profiles = append(profiles, profile)
+
 	}
 
 	return profiles, nil
@@ -975,7 +992,7 @@ func (s *RedisStore) FindProfilesBySubstring(srch string) ([]*Profile, error) {
 		allgood, _ := regexp.MatchString("^[a-zA-Z0-9@]+$", srch)
 		if !allgood {
 
-			log.Printf("Invalid search string supplied: %s", srch)
+			applog.Errorf("Invalid search string supplied: %s", srch)
 			return profiles, nil
 		}
 	}
@@ -1004,7 +1021,7 @@ func (s *RedisStore) FindProfilesBySubstring(srch string) ([]*Profile, error) {
 func dumpKeys(db *redis.Database, pattern string) {
 	rs := db.Command("KEYS", pattern)
 	if !rs.IsOK() {
-		log.Printf("Error dumping keys: %s", rs.Error().Error())
+		applog.Errorf("Error dumping keys: %s", rs.Error().Error())
 		return
 	}
 
@@ -1016,10 +1033,109 @@ func dumpKeys(db *redis.Database, pattern string) {
 func keyExists(db *redis.Database, key string) bool {
 	rs := db.Command("EXISTS", key)
 	if !rs.IsOK() {
-		log.Printf("Unexpected error checking if key exists: %s", rs.Error().Error())
+		applog.Errorf("Unexpected error checking if key exists: %s", rs.Error().Error())
 		return false
 	}
 
 	val, _ := rs.ValueAsBool()
 	return val
+}
+
+func (s *RedisStore) AddItemToFollowerTimelines(pid string, ts int64, item *Item) error {
+
+	rs := s.pdb.Command("ZRANGE", followersKey(pid), 0, MaxInt)
+	if !rs.IsOK() {
+		applog.Errorf("Could not list followers for pid %s: %s", pid, rs.Error().Error())
+		return rs.Error()
+	}
+
+	for _, followerpid := range rs.ValuesAsStrings() {
+		s.AddItemToTimeline(followerpid, pid, ts, item.Key())
+		if item.IsEvent() {
+			s.AddItemToTimeline(followerpid, pid, item.Event, item.EventKey())
+		}
+	}
+
+	return nil
+}
+
+func (s *RedisStore) AddItemToTimeline(pid string, source string, ts int64, itemKey string) error {
+	applog.Debugf("Adding item %s to timeline for %s with source %s", itemKey, pid, source)
+	timelineKey := possiblyKey(pid, ORDERING_TS)
+
+	rs := s.tdb.Command("ZSCORE", timelineKey, itemKey)
+	if !rs.IsOK() {
+		if rs.Error().Error() != "redis: key not found" {
+			applog.Errorf("Could not get score for %s in %s: %s", itemKey, timelineKey, rs.Error().Error())
+			return rs.Error()
+		}
+
+		rs = s.tdb.Command("ZADD", timelineKey, ts, itemKey)
+		if !rs.IsOK() {
+			applog.Errorf("Could not add item %s to timeline %s: %s", itemKey, timelineKey, rs.Error().Error())
+			return rs.Error()
+		}
+
+		// Remember the source of the item
+		sourcesKey := sourcesKey(pid)
+		rs = s.tdb.Command("HSET", sourcesKey, itemKey, source)
+		if !rs.IsOK() {
+			applog.Errorf("Could not set source for %s in %s: %s", itemKey, sourcesKey, rs.Error().Error())
+			return rs.Error()
+		}
+
+	}
+
+	return nil
+}
+
+func (s *RedisStore) RemoveItemFromFollowerTimelines(pid string, itemKey string) error {
+
+	rs := s.pdb.Command("ZRANGE", followersKey(pid), 0, MaxInt)
+	if !rs.IsOK() {
+		applog.Errorf("Could not list followers for pid %s: %s", pid, rs.Error().Error())
+		return rs.Error()
+	}
+
+	for _, followerpid := range rs.ValuesAsStrings() {
+		s.RemoveItemFromTimeline(followerpid, pid, itemKey)
+		s.RemoveItemFromTimeline(followerpid, pid, eventedItemKeyFromItemKey(itemKey))
+		// if item.IsEvent() {
+		// 	s.RemoveItemFromTimeline(followerpid, pid, item.Event, item.EventKey())
+		// }
+	}
+
+	return nil
+}
+
+func (s *RedisStore) RemoveItemFromTimeline(pid string, source string, itemKey string) error {
+	applog.Debugf("Removing item %s from timeline for %s", itemKey, pid)
+	sourcesKey := sourcesKey(pid)
+
+	// Only remove if source is same as the source recorded for this timeline
+	rs := s.tdb.Command("HGET", sourcesKey, itemKey)
+	if !rs.IsOK() {
+		applog.Errorf("Could not get a source for item %s for pid %s: %s", itemKey, pid, rs.Error().Error())
+		return rs.Error()
+	}
+
+	if source != rs.ValueAsString() {
+		// Don't remove the item because it came from a different source
+		return nil
+	}
+
+	timelineKey := possiblyKey(pid, ORDERING_TS)
+
+	rs = s.tdb.Command("ZREM", timelineKey, itemKey)
+	if !rs.IsOK() {
+		return rs.Error()
+	}
+
+	rs = s.tdb.Command("HDEL", sourcesKey, itemKey)
+	if !rs.IsOK() {
+		return rs.Error()
+	}
+
+	return nil
+
 }
