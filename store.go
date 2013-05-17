@@ -595,6 +595,7 @@ func (s *RedisStore) AddItem(pid string, ets time.Time, text string, link string
 		Pid:   pid,
 		Added: tsnano,
 		Event: etsnano,
+		Image: image,
 	}
 
 	json, err := json.Marshal(item)
@@ -629,6 +630,22 @@ func (s *RedisStore) AddItem(pid string, ets time.Time, text string, link string
 	}
 
 	return itemKey, nil
+}
+
+// lifetime is in seconds
+func (s *RedisStore) AddTemporaryItem(item *Item, lifetime int) (string, error) {
+	itemKey, err := s.AddItem(item.Pid, time.Unix(0, item.Event), item.Text, item.Link, item.Image, item.Id)
+
+	if err == nil {
+		rs := s.pdb.Command("EXPIRE", itemKey, lifetime)
+		if !rs.IsOK() {
+			applog.Errorf("Could not set expiry for temporary item %s: %s", itemKey, rs.Error().Error())
+		}
+
+	}
+
+	return itemKey, err
+
 }
 
 func (s *RedisStore) ItemExists(id string) (bool, error) {
@@ -777,10 +794,16 @@ func (s *RedisStore) Promote(pid string, id string) error {
 	// 	// Ignore error
 	// }
 
+	// Ensure the item is persisted (in case it's a temporary search item)
+	rs := s.tdb.Command("PERSIST", itemKey)
+	if !rs.IsOK() {
+		return rs.Error()
+	}
+
 	tsnano := time.Now().UnixNano()
 	maybe_key := maybeKey(pid, ORDERING_TS)
 
-	rs := s.tdb.Command("ZADD", maybe_key, tsnano, itemKey)
+	rs = s.tdb.Command("ZADD", maybe_key, tsnano, itemKey)
 	if !rs.IsOK() {
 		return rs.Error()
 	}
