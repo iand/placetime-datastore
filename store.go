@@ -571,12 +571,12 @@ func (s *RedisStore) AddItem(pid string, ets time.Time, text string, link string
 		itemid = itemId(pid, seq)
 	}
 
-	itemKey := itemKey(itemid)
 	eventedItemKey := eventedItemKey(itemid)
-
-	if exists, _ := s.ItemExists(itemid); exists {
+	itemKey := itemKey(itemid)
+	if exists, _ := s.ItemExists(itemid); !exists {
 		return itemKey, nil
 	}
+
 	tsnano := time.Now().UnixNano()
 
 	etsnano := ets.UnixNano()
@@ -598,25 +598,20 @@ func (s *RedisStore) AddItem(pid string, ets time.Time, text string, link string
 		Image: image,
 	}
 
-	json, err := json.Marshal(item)
+	itemKey, err := s.SaveItem(item, 0)
 	if err != nil {
-		return itemKey, err
+		return "", err
 	}
 
-	rs := s.idb.Command("SET", itemKey, json)
+	rs := s.tdb.Command("ZADD", maybeKey(pid, ORDERING_TS), item.Added, itemKey)
 	if !rs.IsOK() {
 		return "", rs.Error()
-	}
-
-	rs = s.tdb.Command("ZADD", maybeKey(pid, ORDERING_TS), item.Added, itemKey)
-	if !rs.IsOK() {
-		return itemKey, rs.Error()
 	}
 
 	if item.IsEvent() {
 		rs = s.tdb.Command("ZADD", maybeKey(pid, ORDERING_TS), item.Event, eventedItemKey)
 		if !rs.IsOK() {
-			return itemKey, rs.Error()
+			return "", rs.Error()
 		}
 	}
 
@@ -625,18 +620,28 @@ func (s *RedisStore) AddItem(pid string, ets time.Time, text string, link string
 	if item.Link != "" && item.Image == "" {
 		rs := s.pdb.Command("SADD", ITEMS_NEEDING_IMAGES, itemid)
 		if !rs.IsOK() {
-			return itemKey, rs.Error()
+			return "", rs.Error()
 		}
 	}
 
 	return itemKey, nil
 }
 
-// lifetime is in seconds
-func (s *RedisStore) AddTemporaryItem(item *Item, lifetime int) (string, error) {
-	itemKey, err := s.AddItem(item.Pid, time.Unix(0, item.Event), item.Text, item.Link, item.Image, item.Id)
+// lifetime is in seconds, 0 means permanent
+func (s *RedisStore) SaveItem(item *Item, lifetime int) (string, error) {
+	itemKey := itemKey(item.Id)
 
-	if err == nil {
+	json, err := json.Marshal(item)
+	if err != nil {
+		return "", err
+	}
+
+	rs := s.idb.Command("SET", itemKey, json)
+	if !rs.IsOK() {
+		return "", rs.Error()
+	}
+
+	if lifetime > 0 {
 		rs := s.pdb.Command("EXPIRE", itemKey, lifetime)
 		if !rs.IsOK() {
 			applog.Errorf("Could not set expiry for temporary item %s: %s", itemKey, rs.Error().Error())
@@ -644,7 +649,7 @@ func (s *RedisStore) AddTemporaryItem(item *Item, lifetime int) (string, error) 
 
 	}
 
-	return itemKey, err
+	return itemKey, nil
 
 }
 
