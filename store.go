@@ -30,7 +30,7 @@ const (
 
 var (
 	store             *RedisStore
-	ProfileProperties = []string{"name", "feedurl", "bio", "email", "parentpid"}
+	ProfileProperties = []string{"name", "feedurl", "bio", "email", "parentpid", "joined", "location", "url", "profileimageurl", "profileimageurlhttps"}
 )
 
 func InitRedisStore(config Config) {
@@ -157,6 +157,10 @@ func sessionKey(num int64) string {
 	return fmt.Sprintf("session:%d", num)
 }
 
+func oauthSessionKey(key string) string {
+	return fmt.Sprintf("oauth:%s", key)
+}
+
 func sourcesKey(pid string) string {
 	return fmt.Sprintf("%s:sources", pid)
 }
@@ -217,20 +221,42 @@ func (s *RedisStore) ProfileExists(pid string) (bool, error) {
 }
 
 func (s *RedisStore) Profile(pid string) (*Profile, error) {
-	rs := s.pdb.Command("HMGET", profileKey(pid), "name", "bio", "feedurl", "parentpid", "email")
+	rs := s.pdb.Command("HGETALL", profileKey(pid))
 	if !rs.IsOK() {
 		return nil, rs.Error()
 	}
 
+	p := Profile{
+		Pid: pid,
+	}
 	vals := rs.ValuesAsStrings()
 
-	p := Profile{
-		Pid:       pid,
-		Name:      vals[0],
-		Bio:       vals[1],
-		FeedUrl:   vals[2],
-		ParentPid: vals[3],
-		Email:     vals[4],
+	for i := 0; i < len(vals)-1; i += 2 {
+		switch vals[i] {
+		case "name":
+			p.Name = vals[i+1]
+		case "bio":
+			p.Bio = vals[i+1]
+		case "feedurl":
+			p.FeedUrl = vals[i+1]
+		case "parentpid":
+			p.ParentPid = vals[i+1]
+		case "email":
+			p.Email = vals[i+1]
+		case "location":
+			p.Location = vals[i+1]
+		case "url":
+			p.Url = vals[i+1]
+		case "profileimageurl":
+			p.ProfileImageUrl = vals[i+1]
+		case "profileimageurlhttps":
+			p.ProfileImageUrlHttps = vals[i+1]
+		case "joined":
+			if v, err := strconv.ParseInt(vals[i+1], 10, 64); err == nil {
+				p.Joined = v
+			}
+
+		}
 	}
 
 	rs = s.pdb.Command("ZCARD", possiblyKey(pid, ORDERING_TS))
@@ -261,14 +287,14 @@ func (s *RedisStore) Profile(pid string) (*Profile, error) {
 	return &p, nil
 }
 
-func (s *RedisStore) AddProfile(pid string, password string, pname string, bio string, feedurl string, parentpid string, email string) error {
+func (s *RedisStore) AddProfile(pid string, password string, pname string, bio string, feedurl string, parentpid string, email string, location string, url string, profileImageUrl string, profileImageUrlHttps string) error {
 	pwdhash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return err
 	}
 
 	joined := time.Now().Unix()
-	rs := s.pdb.Command("HMSET", profileKey(pid), "name", pname, "bio", bio, "feedurl", feedurl, "pwdhash", pwdhash, "parentpid", parentpid, "email", email, "joined", joined)
+	rs := s.pdb.Command("HMSET", profileKey(pid), "name", pname, "bio", bio, "feedurl", feedurl, "pwdhash", pwdhash, "parentpid", parentpid, "email", email, "joined", joined, "location", location, "url", url, "profileimageurl", profileImageUrl, "profileimageurlhttps", profileImageUrlHttps)
 
 	if !rs.IsOK() {
 		return rs.Error()
@@ -1010,6 +1036,30 @@ func (s *RedisStore) ValidSession(pid string, sessionId int64) (bool, error) {
 	}
 
 	return (rs.ValueAsString() == pid), nil
+
+}
+
+func (s *RedisStore) SetOauthSessionData(key string, data string) error {
+
+	rs := s.sdb.Command("SET", oauthSessionKey(key), data)
+	if !rs.IsOK() {
+		return rs.Error()
+	}
+	rs = s.pdb.Command("EXPIRE", oauthSessionKey(key), 600)
+	if !rs.IsOK() {
+		return rs.Error()
+	}
+
+	return nil
+}
+
+func (s *RedisStore) GetOauthSessionData(key string) (string, error) {
+	rs := s.sdb.Command("GET", oauthSessionKey(key))
+	if !rs.IsOK() {
+		return "", rs.Error()
+	}
+
+	return rs.ValueAsString(), nil
 
 }
 
