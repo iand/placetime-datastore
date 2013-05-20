@@ -578,15 +578,6 @@ func (s *RedisStore) AddItem(pid string, ets time.Time, text string, link string
 	}
 
 	tsnano := time.Now().UnixNano()
-
-	etsnano := ets.UnixNano()
-
-	if etsnano > 0 {
-		// Fake the precision for event time
-		nanos := tsnano - 1000000000*(tsnano/1000000000)
-		etsnano = ets.Unix()*1000000000 + nanos
-	}
-
 	item := &Item{
 
 		Id:    itemid,
@@ -594,7 +585,7 @@ func (s *RedisStore) AddItem(pid string, ets time.Time, text string, link string
 		Link:  link,
 		Pid:   pid,
 		Added: tsnano,
-		Event: etsnano,
+		Event: FakeEventPrecision(ets),
 		Image: image,
 	}
 
@@ -1166,4 +1157,19 @@ func (s *RedisStore) RemoveItemFromTimeline(pid string, source string, itemKey s
 
 	return nil
 
+}
+
+// Fakes some nano second precision for events for unique ordering
+func FakeEventPrecision(ets time.Time) int64 {
+
+	etsnano := ets.UnixNano()
+
+	if etsnano > 0 {
+		// Fake the precision for event time
+		tsnano := time.Now().UnixNano()
+		nanos := tsnano - 1000000000*(tsnano/1000000000)
+		etsnano = ets.Unix()*1000000000 + nanos
+	}
+
+	return etsnano
 }
