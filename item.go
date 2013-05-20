@@ -26,17 +26,16 @@ type Item struct {
 }
 
 type FormattedItem struct {
-	Id     string `json:"id"`
+	Item
 	Ts     int64  `json:"ts"`
-	Added  int64  `json:"added"`
-	Event  int64  `json:"event"`
-	Pid    string `json:"pid"`
-	PName  string `json:"pname,omitempty"`
-	Text   string `json:"text"`
-	Link   string `json:"link"`
-	Media  string `json:"media"`
-	Image  string `json:"image"`
 	Source string `json:"source"`
+}
+
+func NewFormattedItem(item *Item, ts int64, source string) *FormattedItem {
+	fitem := &FormattedItem{Item: *item, Ts: ts, Source: source}
+	fitem.Added = item.Added / 1000000000
+	fitem.Event = item.Event / 1000000000
+	return fitem
 }
 
 func (i *Item) String() string {
@@ -48,9 +47,9 @@ func (i *Item) IsEvent() bool {
 }
 
 func (i *Item) Key() string {
-	return itemKey(i.Id)
+	return ItemKey(i.Id)
 }
 
 func (i *Item) EventKey() string {
-	return eventedItemKey(i.Id)
+	return EventedItemKey(i.Id)
 }

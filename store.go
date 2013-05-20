@@ -147,12 +147,12 @@ func itemId(pid string, seq int) string {
 	return fmt.Sprintf("%s-%d", pid, seq)
 }
 
-func itemKey(itemid string) string {
+func ItemKey(itemid string) string {
 	return fmt.Sprintf("item:%s", itemid)
 }
 
-func eventedItemKey(itemid string) string {
-	return eventedItemKeyFromItemKey(itemKey(itemid))
+func EventedItemKey(itemid string) string {
+	return eventedItemKeyFromItemKey(ItemKey(itemid))
 }
 
 func eventedItemKeyFromItemKey(itemKey string) string {
@@ -452,11 +452,11 @@ func (s *RedisStore) TimelineRange(pid string, status string, ts time.Time, befo
 
 	score := itemScore(ts)
 
-	var key string
+	var timelineKey string
 	if status == "p" {
-		key = possiblyKey(pid, "ts")
+		timelineKey = possiblyKey(pid, "ts")
 	} else {
-		key = maybeKey(pid, "ts")
+		timelineKey = maybeKey(pid, "ts")
 	}
 
 	vals := make([]string, 0)
@@ -464,7 +464,7 @@ func (s *RedisStore) TimelineRange(pid string, status string, ts time.Time, befo
 
 	if after > 0 {
 		// log.Print("ZRANGEBYSCORE", " ", key, " ", score, " ", "+Inf", " ", "WITHSCORES", " ", "LIMIT", " ", 0, " ", after+1)
-		rs := s.tdb.Command("ZRANGEBYSCORE", key, score, "+Inf", "WITHSCORES", "LIMIT", 0, after)
+		rs := s.tdb.Command("ZRANGEBYSCORE", timelineKey, score, "+Inf", "WITHSCORES", "LIMIT", 0, after)
 		if !rs.IsOK() {
 			return nil, rs.Error()
 		}
@@ -487,7 +487,7 @@ func (s *RedisStore) TimelineRange(pid string, status string, ts time.Time, befo
 	formattedScore := fmt.Sprintf("%s%f", delim, score)
 
 	// log.Print("ZREVRANGEBYSCORE", " ", key, " ", formattedScore, " ", "-Inf", " ", "WITHSCORES", " ", "LIMIT", " ", 0, " ", before)
-	rs := s.tdb.Command("ZREVRANGEBYSCORE", key, formattedScore, "-Inf", "WITHSCORES", "LIMIT", 0, before+1)
+	rs := s.tdb.Command("ZREVRANGEBYSCORE", timelineKey, formattedScore, "-Inf", "WITHSCORES", "LIMIT", 0, before+1)
 	if !rs.IsOK() {
 		return nil, rs.Error()
 	}
@@ -518,7 +518,7 @@ func (s *RedisStore) TimelineRange(pid string, status string, ts time.Time, befo
 
 		item_infos := rs.ValuesAsStrings()
 		for _, item_info := range item_infos {
-			item := &FormattedItem{}
+			item := &Item{}
 
 			_ = json.Unmarshal([]byte(item_info), item)
 
@@ -529,27 +529,77 @@ func (s *RedisStore) TimelineRange(pid string, status string, ts time.Time, befo
 
 			}
 
-			item.Ts = int64(f)
-
-			item.Added = item.Added / 1000000000
-			item.Event = item.Event / 1000000000
+			ts := int64(f)
+			source := ""
 
 			rs = s.tdb.Command("HGET", sourcesKey, key)
 			if !rs.IsOK() {
 				// Ignore
 			} else {
-				item.Source = rs.ValueAsString()
+				source = rs.ValueAsString()
 			}
 
-			items = append(items, item)
+			items = append(items, NewFormattedItem(item, ts, source))
 		}
 	}
 	return items, nil
 }
 
-func (s *RedisStore) Item(id string) (*Item, error) {
-	itemKey := itemKey(id)
+// Gets an item as it appears in a timeline along with any associated event
+func (s *RedisStore) ItemInTimeline(item *Item, pid string, status string) ([]*FormattedItem, error) {
+	items := make([]*FormattedItem, 0)
 
+	var timelineKey string
+	if status == "p" {
+		timelineKey = possiblyKey(pid, "ts")
+	} else {
+		timelineKey = maybeKey(pid, "ts")
+	}
+
+	source := ""
+	sourcesKey := sourcesKey(pid)
+	rs := s.tdb.Command("HGET", sourcesKey, item.Key())
+	if !rs.IsOK() {
+		// Ignore
+	} else {
+		source = rs.ValueAsString()
+	}
+
+	if item.IsEvent() {
+		ets := s.ItemScore(item.EventKey(), timelineKey)
+		items = append(items, NewFormattedItem(item, ets, source))
+	}
+
+	ts := s.ItemScore(item.Key(), timelineKey)
+	items = append(items, NewFormattedItem(item, ts, source))
+
+	return items, nil
+}
+
+func (s *RedisStore) ItemScore(itemKey string, timelineKey string) int64 {
+	rs := s.tdb.Command("ZSCORE", timelineKey, itemKey)
+	if !rs.IsOK() {
+		// Ignore
+	} else {
+		f, err := strconv.ParseFloat(rs.ValueAsString(), 64)
+		if err != nil {
+			applog.Errorf("Could not parse score from db as float: %s", err.Error())
+			return 0
+		}
+
+		return int64(f)
+	}
+
+	return 0
+}
+
+// Gets a raw item
+func (s *RedisStore) Item(id string) (*Item, error) {
+	return s.ItemByKey(ItemKey(id))
+}
+
+// Gets a raw item
+func (s *RedisStore) ItemByKey(itemKey string) (*Item, error) {
 	rs := s.idb.Command("GET", itemKey)
 	if !rs.IsOK() {
 		return nil, rs.Error()
@@ -573,8 +623,8 @@ func (s *RedisStore) AddItem(pid string, ets time.Time, text string, link string
 		itemid = fmt.Sprintf("%x", hasher.Sum(nil))
 	}
 
-	eventedItemKey := eventedItemKey(itemid)
-	itemKey := itemKey(itemid)
+	eventedItemKey := EventedItemKey(itemid)
+	itemKey := ItemKey(itemid)
 	if exists, _ := s.ItemExists(itemid); exists {
 		applog.Debugf("Attempted to add item %s but it already exists", itemid)
 		return itemKey, nil
@@ -623,7 +673,7 @@ func (s *RedisStore) AddItem(pid string, ets time.Time, text string, link string
 
 // lifetime is in seconds, 0 means permanent
 func (s *RedisStore) SaveItem(item *Item, lifetime int) (string, error) {
-	itemKey := itemKey(item.Id)
+	itemKey := ItemKey(item.Id)
 
 	json, err := json.Marshal(item)
 	if err != nil {
@@ -648,7 +698,7 @@ func (s *RedisStore) SaveItem(item *Item, lifetime int) (string, error) {
 }
 
 func (s *RedisStore) ItemExists(id string) (bool, error) {
-	rs := s.idb.Command("EXISTS", itemKey(id))
+	rs := s.idb.Command("EXISTS", ItemKey(id))
 	if !rs.IsOK() {
 		return false, rs.Error()
 	}
@@ -658,7 +708,7 @@ func (s *RedisStore) ItemExists(id string) (bool, error) {
 }
 
 func (s *RedisStore) UpdateItem(item *Item) error {
-	itemKey := itemKey(item.Id)
+	itemKey := ItemKey(item.Id)
 
 	json, err := json.Marshal(item)
 	if err != nil {
@@ -781,7 +831,7 @@ func (s *RedisStore) Unfollow(pid string, followpid string) error {
 
 func (s *RedisStore) Promote(pid string, id string) error {
 
-	itemKey := itemKey(id)
+	itemKey := ItemKey(id)
 
 	// rs := s.tdb.Command("ZREM", poss_key, itemKey)
 	// if !rs.IsOK() {
@@ -813,7 +863,7 @@ func (s *RedisStore) Promote(pid string, id string) error {
 	}
 
 	if item.Event > 0 {
-		eventedItemKey := eventedItemKey(id)
+		eventedItemKey := EventedItemKey(id)
 		rs = s.tdb.Command("ZADD", maybe_key, item.Event, eventedItemKey)
 		if !rs.IsOK() {
 			return rs.Error()
@@ -829,8 +879,8 @@ func (s *RedisStore) Promote(pid string, id string) error {
 func (s *RedisStore) Demote(pid string, id string) error {
 
 	// TODO: abort if item is not in possibly timeline
-	itemKey := itemKey(id)
-	eventedItemKey := eventedItemKey(id)
+	itemKey := ItemKey(id)
+	eventedItemKey := EventedItemKey(id)
 
 	maybe_key := maybeKey(pid, ORDERING_TS)
 
