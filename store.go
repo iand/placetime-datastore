@@ -97,12 +97,6 @@ func itemScore(t time.Time) float64 {
 	return float64(t.UnixNano())
 }
 
-func eventedItemScore(t time.Time, ets time.Time) float64 {
-
-	nanos := t.UnixNano() - 1000000000*(t.UnixNano()/1000000000)
-	return float64(ets.Unix()*1000000000 + nanos)
-}
-
 func followerScore(t time.Time) float64 {
 	return float64(t.UnixNano())
 }
@@ -137,10 +131,6 @@ func followingKey(pid string) string {
 
 func followersKey(pid string) string {
 	return fmt.Sprintf("%s:followers", pid)
-}
-
-func itemSeqKey(pid string) string {
-	return fmt.Sprintf("%s:itemseq", pid)
 }
 
 func itemId(pid string, seq int) string {
