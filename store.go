@@ -223,6 +223,7 @@ func (s *RedisStore) Profile(pid string) (*Profile, error) {
 	}
 
 	vals := rs.ValuesAsStrings()
+
 	p := Profile{
 		Pid:       pid,
 		Name:      vals[0],
@@ -266,7 +267,8 @@ func (s *RedisStore) AddProfile(pid string, password string, pname string, bio s
 		return err
 	}
 
-	rs := s.pdb.Command("HMSET", profileKey(pid), "name", pname, "bio", bio, "feedurl", feedurl, "pwdhash", pwdhash, "parentpid", parentpid, "email", email)
+	joined := time.Now().Unix()
+	rs := s.pdb.Command("HMSET", profileKey(pid), "name", pname, "bio", bio, "feedurl", feedurl, "pwdhash", pwdhash, "parentpid", parentpid, "email", email, "joined", joined)
 
 	if !rs.IsOK() {
 		return rs.Error()
@@ -910,23 +912,24 @@ func (s *RedisStore) Demote(pid string, id string) error {
 	return nil
 }
 
-func (s *RedisStore) Followers(pid string, count int, start int) ([]*Profile, error) {
+func (s *RedisStore) Followers(pid string, count int, start int) ([]*FollowingProfile, error) {
 	rs := s.pdb.Command("ZRANGE", followersKey(pid), start, start+count)
 	if !rs.IsOK() {
 		return nil, rs.Error()
 	}
 
-	profiles := make([]*Profile, 0)
+	profiles := make([]*FollowingProfile, 0)
 
 	vals := rs.ValuesAsStrings()
 
-	for _, pid := range vals {
-		profile, err := s.Profile(pid)
+	for _, fpid := range vals {
+		profile, err := s.Profile(fpid)
 		if err != nil {
-			// TODO: log
+			applog.Errorf("Could not retrieve profile for %s: %s", fpid, err.Error())
 		} else {
-
-			profiles = append(profiles, profile)
+			follows, _ := s.Follows(fpid, pid)
+			fprofile := &FollowingProfile{Profile: *profile, Reciprocal: follows}
+			profiles = append(profiles, fprofile)
 		}
 	}
 
@@ -934,28 +937,44 @@ func (s *RedisStore) Followers(pid string, count int, start int) ([]*Profile, er
 
 }
 
-func (s *RedisStore) Following(pid string, count int, start int) ([]*Profile, error) {
+func (s *RedisStore) Following(pid string, count int, start int) ([]*FollowingProfile, error) {
 	rs := s.pdb.Command("ZRANGE", followingKey(pid), start, start+count)
 	if !rs.IsOK() {
 		return nil, rs.Error()
 	}
 
-	profiles := make([]*Profile, 0)
+	profiles := make([]*FollowingProfile, 0)
 
 	vals := rs.ValuesAsStrings()
 
-	for _, pid := range vals {
-		profile, err := s.Profile(pid)
+	for _, fpid := range vals {
+		profile, err := s.Profile(fpid)
 		if err != nil {
-			// TODO: log
+			applog.Errorf("Could not retrieve profile for %s: %s", fpid, err.Error())
 		} else {
-			profiles = append(profiles, profile)
+			follows, _ := s.Follows(pid, fpid)
+			fprofile := &FollowingProfile{Profile: *profile, Reciprocal: follows}
+			profiles = append(profiles, fprofile)
 		}
 
 	}
 
 	return profiles, nil
 
+}
+
+// Returns whether follower follows pid
+func (s *RedisStore) Follows(pid string, follower string) (bool, error) {
+	rs := s.pdb.Command("ZSCORE", followersKey(pid), follower)
+	if !rs.IsOK() {
+		if rs.Error().Error() != "redis: key not found" {
+			applog.Errorf("Could not get score for %s in %s: %s", follower, followersKey(pid), rs.Error().Error())
+			return false, rs.Error()
+		}
+		return false, nil
+	}
+
+	return true, nil
 }
 
 func (s *RedisStore) VerifyPassword(pid string, password string) (bool, error) {
