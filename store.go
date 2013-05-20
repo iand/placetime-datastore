@@ -4,8 +4,10 @@ import (
 	"cgl.tideland.biz/applog"
 	"code.google.com/p/go.crypto/bcrypt"
 	"code.google.com/p/tcgl/redis"
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"regexp"
@@ -562,18 +564,19 @@ func (s *RedisStore) Item(id string) (*Item, error) {
 func (s *RedisStore) AddItem(pid string, ets time.Time, text string, link string, image string, itemid string) (string, error) {
 
 	if itemid == "" {
-		rs := s.idb.Command("INCR", itemSeqKey(pid))
-		if !rs.IsOK() {
-			return "", rs.Error()
-		}
-		seq, _ := rs.ValueAsInt()
 
-		itemid = itemId(pid, seq)
+		hasher := md5.New()
+		io.WriteString(hasher, pid)
+		io.WriteString(hasher, text)
+		io.WriteString(hasher, link)
+		io.WriteString(hasher, ets.String())
+		itemid = fmt.Sprintf("%x", hasher.Sum(nil))
 	}
 
 	eventedItemKey := eventedItemKey(itemid)
 	itemKey := itemKey(itemid)
-	if exists, _ := s.ItemExists(itemid); !exists {
+	if exists, _ := s.ItemExists(itemid); exists {
+		applog.Debugf("Attempted to add item %s but it already exists", itemid)
 		return itemKey, nil
 	}
 
