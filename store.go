@@ -33,6 +33,12 @@ var (
 	ProfileProperties = []string{"name", "feedurl", "bio", "email", "parentpid", "joined", "location", "url", "profileimageurl", "profileimageurlhttps"}
 )
 
+type PidType string
+
+func (p PidType) String() string {
+	return string(p)
+}
+
 func InitRedisStore(config Config) {
 	// Contains all profiles and meta stuff
 	profiledb := redis.Connect(redis.Configuration{
@@ -101,39 +107,39 @@ func followerScore(t time.Time) float64 {
 	return float64(t.UnixNano())
 }
 
-func profileKey(pid string) string {
-	return fmt.Sprintf("%s:info", pid)
+func profileKey(pid PidType) PidType {
+	return PidType(fmt.Sprintf("%s:info", string(pid)))
 }
 
-func pidFromKey(key string) string {
+func pidFromKey(key string) PidType {
 	if strings.HasSuffix(key, ":info") {
-		return key[:len(key)-5]
+		return PidType(key[:len(key)-5])
 	}
-	return key
+	return PidType(key)
 
 }
 
-func feedsKey(pid string) string {
+func feedsKey(pid PidType) string {
 	return fmt.Sprintf("%s:feeds", pid)
 }
 
-func possiblyKey(pid string, ordering string) string {
+func possiblyKey(pid PidType, ordering string) string {
 	return fmt.Sprintf("%s:possibly:%s", pid, ordering)
 }
 
-func maybeKey(pid string, ordering string) string {
+func maybeKey(pid PidType, ordering string) string {
 	return fmt.Sprintf("%s:maybe:%s", pid, ordering)
 }
 
-func followingKey(pid string) string {
+func followingKey(pid PidType) string {
 	return fmt.Sprintf("%s:following", pid)
 }
 
-func followersKey(pid string) string {
+func followersKey(pid PidType) string {
 	return fmt.Sprintf("%s:followers", pid)
 }
 
-func itemId(pid string, seq int) string {
+func itemId(pid PidType, seq int) string {
 	return fmt.Sprintf("%s-%d", pid, seq)
 }
 
@@ -161,7 +167,7 @@ func oauthSessionKey(key string) string {
 	return fmt.Sprintf("oauth:%s", key)
 }
 
-func sourcesKey(pid string) string {
+func sourcesKey(pid PidType) string {
 	return fmt.Sprintf("%s:sources", pid)
 }
 
@@ -180,7 +186,7 @@ func (s *RedisStore) SuggestedProfiles(loc string) ([]*Profile, error) {
 	vals := rs.ValuesAsStrings()
 
 	for _, pid := range vals {
-		profile, err := s.Profile(pid)
+		profile, err := s.Profile(PidType(pid))
 		if err != nil {
 			// TODO: log
 		} else {
@@ -192,7 +198,7 @@ func (s *RedisStore) SuggestedProfiles(loc string) ([]*Profile, error) {
 	return profiles, nil
 }
 
-func (s *RedisStore) AddSuggestedProfile(pid string, loc string) error {
+func (s *RedisStore) AddSuggestedProfile(pid PidType, loc string) error {
 	rs := s.pdb.Command("SADD", suggestedProfileKey(loc), pid)
 	if !rs.IsOK() {
 		return rs.Error()
@@ -201,7 +207,7 @@ func (s *RedisStore) AddSuggestedProfile(pid string, loc string) error {
 	return nil
 }
 
-func (s *RedisStore) RemoveSuggestedProfile(pid string, loc string) error {
+func (s *RedisStore) RemoveSuggestedProfile(pid PidType, loc string) error {
 	rs := s.pdb.Command("SREM", suggestedProfileKey(loc), pid)
 	if !rs.IsOK() {
 		return rs.Error()
@@ -210,7 +216,7 @@ func (s *RedisStore) RemoveSuggestedProfile(pid string, loc string) error {
 	return nil
 }
 
-func (s *RedisStore) ProfileExists(pid string) (bool, error) {
+func (s *RedisStore) ProfileExists(pid PidType) (bool, error) {
 	rs := s.pdb.Command("EXISTS", profileKey(pid))
 	if !rs.IsOK() {
 		return false, rs.Error()
@@ -220,7 +226,7 @@ func (s *RedisStore) ProfileExists(pid string) (bool, error) {
 	return val, err
 }
 
-func (s *RedisStore) Profile(pid string) (*Profile, error) {
+func (s *RedisStore) Profile(pid PidType) (*Profile, error) {
 	rs := s.pdb.Command("HGETALL", profileKey(pid))
 	if !rs.IsOK() {
 		return nil, rs.Error()
@@ -240,7 +246,7 @@ func (s *RedisStore) Profile(pid string) (*Profile, error) {
 		case "feedurl":
 			p.FeedUrl = vals[i+1]
 		case "parentpid":
-			p.ParentPid = vals[i+1]
+			p.ParentPid = PidType(vals[i+1])
 		case "email":
 			p.Email = vals[i+1]
 		case "location":
@@ -287,7 +293,7 @@ func (s *RedisStore) Profile(pid string) (*Profile, error) {
 	return &p, nil
 }
 
-func (s *RedisStore) AddProfile(pid string, password string, pname string, bio string, feedurl string, parentpid string, email string, location string, url string, profileImageUrl string, profileImageUrlHttps string) error {
+func (s *RedisStore) AddProfile(pid PidType, password string, pname string, bio string, feedurl string, parentpid PidType, email string, location string, url string, profileImageUrl string, profileImageUrlHttps string) error {
 	pwdhash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return err
@@ -317,7 +323,7 @@ func (s *RedisStore) AddProfile(pid string, password string, pname string, bio s
 
 }
 
-func (s *RedisStore) UpdateProfile(pid string, values map[string]string) error {
+func (s *RedisStore) UpdateProfile(pid PidType, values map[string]string) error {
 	params := make([]interface{}, 0)
 	params = append(params, profileKey(pid))
 	for k, v := range values {
@@ -342,7 +348,7 @@ func (s *RedisStore) UpdateProfile(pid string, values map[string]string) error {
 	}
 
 	if parentpid, exists := values["parentpid"]; exists && parentpid != "" {
-		rs := s.pdb.Command("SADD", feedsKey(parentpid), pid)
+		rs := s.pdb.Command("SADD", feedsKey(PidType(parentpid)), pid)
 		if !rs.IsOK() {
 			return rs.Error()
 		}
@@ -352,7 +358,7 @@ func (s *RedisStore) UpdateProfile(pid string, values map[string]string) error {
 
 }
 
-func (s *RedisStore) RemoveProfile(pid string) error {
+func (s *RedisStore) RemoveProfile(pid PidType) error {
 
 	p, err := s.Profile(pid)
 	if err != nil {
@@ -381,7 +387,7 @@ func (s *RedisStore) RemoveProfile(pid string) error {
 
 	vals := rs.ValuesAsStrings()
 	for _, val := range vals {
-		rs = s.pdb.Command("ZREM", followersKey(val), pid)
+		rs = s.pdb.Command("ZREM", followersKey(PidType(val)), pid)
 		if !rs.IsOK() {
 			return rs.Error()
 		}
@@ -412,7 +418,7 @@ func (s *RedisStore) RemoveProfile(pid string) error {
 	return nil
 }
 
-func (s *RedisStore) FlagProfile(pid string) error {
+func (s *RedisStore) FlagProfile(pid PidType) error {
 
 	rs := s.pdb.Command("ZINCRBY", FLAGGED_PROFILES, "1.0", pid)
 	if !rs.IsOK() {
@@ -455,7 +461,7 @@ func (s *RedisStore) FeedDrivenProfiles() ([]*Profile, error) {
 	vals := rs.ValuesAsStrings()
 
 	for _, pid := range vals {
-		profile, err := s.Profile(pid)
+		profile, err := s.Profile(PidType(pid))
 		if err != nil {
 			applog.Errorf("Unable to read profile %s from store: %s", pid, err.Error())
 			continue
@@ -466,7 +472,7 @@ func (s *RedisStore) FeedDrivenProfiles() ([]*Profile, error) {
 	return profiles, nil
 }
 
-func (s *RedisStore) TimelineRange(pid string, status string, ts time.Time, before int, after int) ([]*FormattedItem, error) {
+func (s *RedisStore) TimelineRange(pid PidType, status string, ts time.Time, before int, after int) ([]*FormattedItem, error) {
 
 	score := itemScore(ts)
 
@@ -564,7 +570,7 @@ func (s *RedisStore) TimelineRange(pid string, status string, ts time.Time, befo
 }
 
 // Gets an item as it appears in a timeline along with any associated event
-func (s *RedisStore) ItemInTimeline(item *Item, pid string, status string) ([]*FormattedItem, error) {
+func (s *RedisStore) ItemInTimeline(item *Item, pid PidType, status string) ([]*FormattedItem, error) {
 	items := make([]*FormattedItem, 0)
 
 	var timelineKey string
@@ -629,12 +635,12 @@ func (s *RedisStore) ItemByKey(itemKey string) (*Item, error) {
 	return item, nil
 }
 
-func (s *RedisStore) AddItem(pid string, ets time.Time, text string, link string, image string, itemid string) (string, error) {
+func (s *RedisStore) AddItem(pid PidType, ets time.Time, text string, link string, image string, itemid string) (string, error) {
 
 	if itemid == "" {
 
 		hasher := md5.New()
-		io.WriteString(hasher, pid)
+		io.WriteString(hasher, string(pid))
 		io.WriteString(hasher, text)
 		io.WriteString(hasher, link)
 		io.WriteString(hasher, ets.String())
@@ -741,7 +747,7 @@ func (s *RedisStore) UpdateItem(item *Item) error {
 
 }
 
-func (s *RedisStore) DeleteMaybeItems(pid string) error {
+func (s *RedisStore) DeleteMaybeItems(pid PidType) error {
 	rs := s.tdb.Command("DEL", maybeKey(pid, ORDERING_TS))
 	if !rs.IsOK() {
 		return rs.Error()
@@ -775,7 +781,7 @@ func (s *RedisStore) ResetAll() error {
 }
 
 // Make pid follow followpid
-func (s *RedisStore) Follow(pid string, followpid string) error {
+func (s *RedisStore) Follow(pid PidType, followpid PidType) error {
 	score := followerScore(time.Now())
 
 	rs := s.pdb.Command("ZADD", followingKey(pid), score, followpid)
@@ -817,7 +823,7 @@ func (s *RedisStore) Follow(pid string, followpid string) error {
 }
 
 // Make pid stop following followpid
-func (s *RedisStore) Unfollow(pid string, followpid string) error {
+func (s *RedisStore) Unfollow(pid PidType, followpid PidType) error {
 
 	rs := s.pdb.Command("ZREM", followingKey(pid), followpid)
 	if !rs.IsOK() {
@@ -847,7 +853,7 @@ func (s *RedisStore) Unfollow(pid string, followpid string) error {
 	return nil
 }
 
-func (s *RedisStore) Promote(pid string, id string) error {
+func (s *RedisStore) Promote(pid PidType, id string) error {
 
 	itemKey := ItemKey(id)
 
@@ -894,7 +900,7 @@ func (s *RedisStore) Promote(pid string, id string) error {
 
 }
 
-func (s *RedisStore) Demote(pid string, id string) error {
+func (s *RedisStore) Demote(pid PidType, id string) error {
 
 	// TODO: abort if item is not in possibly timeline
 	itemKey := ItemKey(id)
@@ -938,7 +944,7 @@ func (s *RedisStore) Demote(pid string, id string) error {
 	return nil
 }
 
-func (s *RedisStore) Followers(pid string, count int, start int) ([]*FollowingProfile, error) {
+func (s *RedisStore) Followers(pid PidType, count int, start int) ([]*FollowingProfile, error) {
 	rs := s.pdb.Command("ZRANGE", followersKey(pid), start, start+count)
 	if !rs.IsOK() {
 		return nil, rs.Error()
@@ -949,11 +955,11 @@ func (s *RedisStore) Followers(pid string, count int, start int) ([]*FollowingPr
 	vals := rs.ValuesAsStrings()
 
 	for _, fpid := range vals {
-		profile, err := s.Profile(fpid)
+		profile, err := s.Profile(PidType(fpid))
 		if err != nil {
 			applog.Errorf("Could not retrieve profile for %s: %s", fpid, err.Error())
 		} else {
-			follows, _ := s.Follows(fpid, pid)
+			follows, _ := s.Follows(PidType(fpid), pid)
 			fprofile := &FollowingProfile{Profile: *profile, Reciprocal: follows}
 			profiles = append(profiles, fprofile)
 		}
@@ -963,7 +969,7 @@ func (s *RedisStore) Followers(pid string, count int, start int) ([]*FollowingPr
 
 }
 
-func (s *RedisStore) Following(pid string, count int, start int) ([]*FollowingProfile, error) {
+func (s *RedisStore) Following(pid PidType, count int, start int) ([]*FollowingProfile, error) {
 	rs := s.pdb.Command("ZRANGE", followingKey(pid), start, start+count)
 	if !rs.IsOK() {
 		return nil, rs.Error()
@@ -974,11 +980,11 @@ func (s *RedisStore) Following(pid string, count int, start int) ([]*FollowingPr
 	vals := rs.ValuesAsStrings()
 
 	for _, fpid := range vals {
-		profile, err := s.Profile(fpid)
+		profile, err := s.Profile(PidType(fpid))
 		if err != nil {
 			applog.Errorf("Could not retrieve profile for %s: %s", fpid, err.Error())
 		} else {
-			follows, _ := s.Follows(pid, fpid)
+			follows, _ := s.Follows(pid, PidType(fpid))
 			fprofile := &FollowingProfile{Profile: *profile, Reciprocal: follows}
 			profiles = append(profiles, fprofile)
 		}
@@ -990,7 +996,7 @@ func (s *RedisStore) Following(pid string, count int, start int) ([]*FollowingPr
 }
 
 // Returns whether follower follows pid
-func (s *RedisStore) Follows(pid string, follower string) (bool, error) {
+func (s *RedisStore) Follows(pid PidType, follower PidType) (bool, error) {
 	rs := s.pdb.Command("ZSCORE", followersKey(pid), follower)
 	if !rs.IsOK() {
 		if rs.Error().Error() != "redis: key not found" {
@@ -1003,7 +1009,7 @@ func (s *RedisStore) Follows(pid string, follower string) (bool, error) {
 	return true, nil
 }
 
-func (s *RedisStore) VerifyPassword(pid string, password string) (bool, error) {
+func (s *RedisStore) VerifyPassword(pid PidType, password string) (bool, error) {
 	rs := s.pdb.Command("HGET", profileKey(pid), "pwdhash")
 	if !rs.IsOK() {
 		return false, rs.Error()
@@ -1019,7 +1025,7 @@ func (s *RedisStore) VerifyPassword(pid string, password string) (bool, error) {
 	return true, nil
 }
 
-func (s *RedisStore) SessionId(pid string) (int64, error) {
+func (s *RedisStore) SessionId(pid PidType) (int64, error) {
 	sessionId := rand.Int63()
 	rs := s.sdb.Command("SET", sessionKey(sessionId), pid)
 	if !rs.IsOK() {
@@ -1029,13 +1035,13 @@ func (s *RedisStore) SessionId(pid string) (int64, error) {
 	return sessionId, nil
 }
 
-func (s *RedisStore) ValidSession(pid string, sessionId int64) (bool, error) {
+func (s *RedisStore) ValidSession(pid PidType, sessionId int64) (bool, error) {
 	rs := s.sdb.Command("GET", sessionKey(sessionId))
 	if !rs.IsOK() {
 		return false, rs.Error()
 	}
 
-	return (rs.ValueAsString() == pid), nil
+	return (PidType(rs.ValueAsString()) == pid), nil
 
 }
 
@@ -1063,7 +1069,7 @@ func (s *RedisStore) GetOauthSessionData(key string) (string, error) {
 
 }
 
-func (s *RedisStore) Feeds(pid string) ([]*Profile, error) {
+func (s *RedisStore) Feeds(pid PidType) ([]*Profile, error) {
 	rs := s.pdb.Command("SMEMBERS", feedsKey(pid))
 	if !rs.IsOK() {
 		return nil, rs.Error()
@@ -1074,7 +1080,7 @@ func (s *RedisStore) Feeds(pid string) ([]*Profile, error) {
 	vals := rs.ValuesAsStrings()
 
 	for _, fid := range vals {
-		feed, err := s.Profile(fid)
+		feed, err := s.Profile(PidType(fid))
 		if err != nil {
 			// TODO: log
 		} else {
@@ -1172,7 +1178,7 @@ func keyExists(db *redis.Database, key string) bool {
 	return val
 }
 
-func (s *RedisStore) AddItemToFollowerTimelines(pid string, ts int64, item *Item) error {
+func (s *RedisStore) AddItemToFollowerTimelines(pid PidType, ts int64, item *Item) error {
 
 	rs := s.pdb.Command("ZRANGE", followersKey(pid), 0, MaxInt)
 	if !rs.IsOK() {
@@ -1181,16 +1187,16 @@ func (s *RedisStore) AddItemToFollowerTimelines(pid string, ts int64, item *Item
 	}
 
 	for _, followerpid := range rs.ValuesAsStrings() {
-		s.AddItemToTimeline(followerpid, pid, ts, item.Key())
+		s.AddItemToTimeline(PidType(followerpid), pid, ts, item.Key())
 		if item.IsEvent() {
-			s.AddItemToTimeline(followerpid, pid, item.Event, item.EventKey())
+			s.AddItemToTimeline(PidType(followerpid), pid, item.Event, item.EventKey())
 		}
 	}
 
 	return nil
 }
 
-func (s *RedisStore) AddItemToTimeline(pid string, source string, ts int64, itemKey string) error {
+func (s *RedisStore) AddItemToTimeline(pid PidType, source PidType, ts int64, itemKey string) error {
 	applog.Debugf("Adding item %s to timeline for %s with source %s", itemKey, pid, source)
 	timelineKey := possiblyKey(pid, ORDERING_TS)
 
@@ -1220,7 +1226,7 @@ func (s *RedisStore) AddItemToTimeline(pid string, source string, ts int64, item
 	return nil
 }
 
-func (s *RedisStore) RemoveItemFromFollowerTimelines(pid string, itemKey string) error {
+func (s *RedisStore) RemoveItemFromFollowerTimelines(pid PidType, itemKey string) error {
 
 	rs := s.pdb.Command("ZRANGE", followersKey(pid), 0, MaxInt)
 	if !rs.IsOK() {
@@ -1229,8 +1235,8 @@ func (s *RedisStore) RemoveItemFromFollowerTimelines(pid string, itemKey string)
 	}
 
 	for _, followerpid := range rs.ValuesAsStrings() {
-		s.RemoveItemFromTimeline(followerpid, pid, itemKey)
-		s.RemoveItemFromTimeline(followerpid, pid, eventedItemKeyFromItemKey(itemKey))
+		s.RemoveItemFromTimeline(PidType(followerpid), pid, itemKey)
+		s.RemoveItemFromTimeline(PidType(followerpid), pid, eventedItemKeyFromItemKey(itemKey))
 		// if item.IsEvent() {
 		// 	s.RemoveItemFromTimeline(followerpid, pid, item.Event, item.EventKey())
 		// }
@@ -1239,7 +1245,7 @@ func (s *RedisStore) RemoveItemFromFollowerTimelines(pid string, itemKey string)
 	return nil
 }
 
-func (s *RedisStore) RemoveItemFromTimeline(pid string, source string, itemKey string) error {
+func (s *RedisStore) RemoveItemFromTimeline(pid PidType, source PidType, itemKey string) error {
 	applog.Debugf("Removing item %s from timeline for %s", itemKey, pid)
 	sourcesKey := sourcesKey(pid)
 
@@ -1250,7 +1256,7 @@ func (s *RedisStore) RemoveItemFromTimeline(pid string, source string, itemKey s
 		return rs.Error()
 	}
 
-	if source != rs.ValueAsString() {
+	if source != PidType(rs.ValueAsString()) {
 		// Don't remove the item because it came from a different source
 		return nil
 	}
