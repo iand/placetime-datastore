@@ -39,6 +39,12 @@ func (p PidType) String() string {
 	return string(p)
 }
 
+type ItemIdType string
+
+func (i ItemIdType) String() string {
+	return string(i)
+}
+
 func InitRedisStore(config Config) {
 	// Contains all profiles and meta stuff
 	profiledb := redis.Connect(redis.Configuration{
@@ -143,11 +149,11 @@ func itemId(pid PidType, seq int) string {
 	return fmt.Sprintf("%s-%d", pid, seq)
 }
 
-func ItemKey(itemid string) string {
+func ItemKey(itemid ItemIdType) string {
 	return fmt.Sprintf("item:%s", itemid)
 }
 
-func EventedItemKey(itemid string) string {
+func EventedItemKey(itemid ItemIdType) string {
 	return eventedItemKeyFromItemKey(ItemKey(itemid))
 }
 
@@ -618,7 +624,7 @@ func (s *RedisStore) ItemScore(itemKey string, timelineKey string) int64 {
 }
 
 // Gets a raw item
-func (s *RedisStore) Item(id string) (*Item, error) {
+func (s *RedisStore) Item(id ItemIdType) (*Item, error) {
 	return s.ItemByKey(ItemKey(id))
 }
 
@@ -635,7 +641,7 @@ func (s *RedisStore) ItemByKey(itemKey string) (*Item, error) {
 	return item, nil
 }
 
-func (s *RedisStore) AddItem(pid PidType, ets time.Time, text string, link string, image string, itemid string) (string, error) {
+func (s *RedisStore) AddItem(pid PidType, ets time.Time, text string, link string, image string, itemid ItemIdType) (string, error) {
 
 	if itemid == "" {
 
@@ -644,7 +650,7 @@ func (s *RedisStore) AddItem(pid PidType, ets time.Time, text string, link strin
 		io.WriteString(hasher, text)
 		io.WriteString(hasher, link)
 		io.WriteString(hasher, ets.String())
-		itemid = fmt.Sprintf("%x", hasher.Sum(nil))
+		itemid = ItemIdType(fmt.Sprintf("%x", hasher.Sum(nil)))
 	}
 
 	eventedItemKey := EventedItemKey(itemid)
@@ -721,7 +727,7 @@ func (s *RedisStore) SaveItem(item *Item, lifetime int) (string, error) {
 
 }
 
-func (s *RedisStore) ItemExists(id string) (bool, error) {
+func (s *RedisStore) ItemExists(id ItemIdType) (bool, error) {
 	rs := s.idb.Command("EXISTS", ItemKey(id))
 	if !rs.IsOK() {
 		return false, rs.Error()
@@ -853,7 +859,7 @@ func (s *RedisStore) Unfollow(pid PidType, followpid PidType) error {
 	return nil
 }
 
-func (s *RedisStore) Promote(pid PidType, id string) error {
+func (s *RedisStore) Promote(pid PidType, id ItemIdType) error {
 
 	itemKey := ItemKey(id)
 
@@ -900,7 +906,7 @@ func (s *RedisStore) Promote(pid PidType, id string) error {
 
 }
 
-func (s *RedisStore) Demote(pid PidType, id string) error {
+func (s *RedisStore) Demote(pid PidType, id ItemIdType) error {
 
 	// TODO: abort if item is not in possibly timeline
 	itemKey := ItemKey(id)
@@ -1105,7 +1111,7 @@ func (s *RedisStore) GrabItemsNeedingImages(max int) ([]*Item, error) {
 				return items, rs.Error()
 			}
 
-			itemid := rs.ValueAsString()
+			itemid := ItemIdType(rs.ValueAsString())
 
 			s.pdb.Command("SREM", ITEMS_NEEDING_IMAGES, itemid)
 			item, err := s.Item(itemid)
