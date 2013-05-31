@@ -36,13 +36,13 @@ var (
 type PidType string
 
 func (p PidType) String() string {
-	return string(p)
+	return strings.ToLower(string(p))
 }
 
 type ItemIdType string
 
 func (i ItemIdType) String() string {
-	return string(i)
+	return strings.ToLower(string(i))
 }
 
 func InitRedisStore(config Config) {
