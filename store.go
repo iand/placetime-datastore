@@ -1127,7 +1127,7 @@ func (s *RedisStore) FindProfilesBySubstring(srch string) ([]*Profile, error) {
 
 	profiles := make([]*Profile, 0)
 
-	// Ful wildcard is an exception
+	// Full wildcard is an exception
 	if srch == "*" {
 		srch = ""
 	} else {
