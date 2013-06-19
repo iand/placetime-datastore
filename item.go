@@ -56,3 +56,18 @@ func (i *Item) Key() string {
 func (i *Item) EventKey() string {
 	return EventedItemKey(i.Id)
 }
+
+func (item *Item) Sanitize() {
+	if item.Added == 0 {
+		item.Added = time.Now().UnixNano()
+	}
+
+	if item.Media == "" {
+		if item.Event != 0 {
+			item.Media = "event"
+		} else {
+			item.Media = "text"
+		}
+	}
+
+}

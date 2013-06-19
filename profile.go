@@ -18,6 +18,7 @@ type Profile struct {
 	FeedCount            int     `json:"feedcount"`
 	FeedUrl              string  `json:"feedurl,omitempty"`
 	ParentPid            PidType `json:"parentpid,omitempty"`
+	ItemType             string  `json:"itemtype,omitempty"`
 }
 
 type ScoredProfile struct {
@@ -33,6 +34,5 @@ type FollowingProfile struct {
 type BriefProfile struct {
 	Pid                  PidType `json:"pid"`
 	Name                 string  `json:"name,omitempty"`
-	ProfileImageUrl      string  `json:"profileimageurl,omitempty"`
 	ProfileImageUrlHttps string  `json:"profileimageurlhttps,omitempty"`
 }

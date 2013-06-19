@@ -263,6 +263,8 @@ func (s *RedisStore) Profile(pid PidType) (*Profile, error) {
 			p.ProfileImageUrl = vals[i+1]
 		case "profileimageurlhttps":
 			p.ProfileImageUrlHttps = vals[i+1]
+		case "itemtype":
+			p.ItemType = vals[i+1]
 		case "joined":
 			if v, err := strconv.ParseInt(vals[i+1], 10, 64); err == nil {
 				p.Joined = v
@@ -314,8 +316,6 @@ func (s *RedisStore) BriefProfile(pid PidType) (*BriefProfile, error) {
 		switch vals[i] {
 		case "name":
 			p.Name = vals[i+1]
-		case "profileimageurl":
-			p.ProfileImageUrl = vals[i+1]
 		case "profileimageurlhttps":
 			p.ProfileImageUrlHttps = vals[i+1]
 		}
@@ -324,14 +324,14 @@ func (s *RedisStore) BriefProfile(pid PidType) (*BriefProfile, error) {
 	return &p, nil
 }
 
-func (s *RedisStore) AddProfile(pid PidType, password string, pname string, bio string, feedurl string, parentpid PidType, email string, location string, url string, profileImageUrl string, profileImageUrlHttps string) error {
+func (s *RedisStore) AddProfile(pid PidType, password string, pname string, bio string, feedurl string, parentpid PidType, email string, location string, url string, profileImageUrl string, profileImageUrlHttps string, itemType string) error {
 	pwdhash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return err
 	}
 
 	joined := time.Now().Unix()
-	rs := s.pdb.Command("HMSET", profileKey(pid), "name", pname, "bio", bio, "feedurl", feedurl, "pwdhash", pwdhash, "parentpid", parentpid, "email", email, "joined", joined, "location", location, "url", url, "profileimageurl", profileImageUrl, "profileimageurlhttps", profileImageUrlHttps)
+	rs := s.pdb.Command("HMSET", profileKey(pid), "name", pname, "bio", bio, "feedurl", feedurl, "pwdhash", pwdhash, "parentpid", parentpid, "email", email, "joined", joined, "location", location, "url", url, "profileimageurl", profileImageUrl, "profileimageurlhttps", profileImageUrlHttps, "itemtype", itemType)
 
 	if !rs.IsOK() {
 		return rs.Error()
@@ -697,7 +697,7 @@ func (s *RedisStore) ItemByKey(itemKey string) (*Item, error) {
 	return item, nil
 }
 
-func (s *RedisStore) AddItem(pid PidType, ets time.Time, text string, link string, image string, itemid ItemIdType) (string, error) {
+func (s *RedisStore) AddItem(pid PidType, ets time.Time, text string, link string, image string, itemid ItemIdType, media string) (string, error) {
 
 	if itemid == "" {
 
@@ -716,6 +716,8 @@ func (s *RedisStore) AddItem(pid PidType, ets time.Time, text string, link strin
 		return itemKey, nil
 	}
 
+	etsnano := FakeEventPrecision(ets)
+
 	tsnano := time.Now().UnixNano()
 	item := &Item{
 
@@ -724,8 +726,9 @@ func (s *RedisStore) AddItem(pid PidType, ets time.Time, text string, link strin
 		Link:  link,
 		Pid:   pid,
 		Added: tsnano,
-		Event: FakeEventPrecision(ets),
+		Event: etsnano,
 		Image: image,
+		Media: media,
 	}
 
 	itemKey, err := s.SaveItem(item, 0)
@@ -759,6 +762,9 @@ func (s *RedisStore) AddItem(pid PidType, ets time.Time, text string, link strin
 
 // lifetime is in seconds, 0 means permanent
 func (s *RedisStore) SaveItem(item *Item, lifetime int) (string, error) {
+
+	item.Sanitize()
+
 	itemKey := ItemKey(item.Id)
 
 	json, err := json.Marshal(item)
