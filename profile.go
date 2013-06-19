@@ -29,3 +29,10 @@ type FollowingProfile struct {
 	Profile
 	Reciprocal bool `json:"reciprocal"`
 }
+
+type BriefProfile struct {
+	Pid                  PidType `json:"pid"`
+	Name                 string  `json:"name,omitempty"`
+	ProfileImageUrl      string  `json:"profileimageurl,omitempty"`
+	ProfileImageUrlHttps string  `json:"profileimageurlhttps,omitempty"`
+}

@@ -28,11 +28,13 @@ type Item struct {
 
 type FormattedItem struct {
 	Item
-	Ts     int64  `json:"ts"`
-	Source string `json:"source"`
+	Ts     int64         `json:"ts"`
+	Source PidType       `json:"source"`
+	Author *BriefProfile `json:"author,omitempty"`
+	Via    *BriefProfile `json:"via,omitempty"`
 }
 
-func NewFormattedItem(item *Item, ts int64, source string) *FormattedItem {
+func NewFormattedItem(item *Item, ts int64, source PidType) *FormattedItem {
 	fitem := &FormattedItem{Item: *item, Ts: ts, Source: source}
 	fitem.Added = item.Added / 1000000000
 	fitem.Event = item.Event / 1000000000

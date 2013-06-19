@@ -299,6 +299,31 @@ func (s *RedisStore) Profile(pid PidType) (*Profile, error) {
 	return &p, nil
 }
 
+func (s *RedisStore) BriefProfile(pid PidType) (*BriefProfile, error) {
+	rs := s.pdb.Command("HGETALL", profileKey(pid))
+	if !rs.IsOK() {
+		return nil, rs.Error()
+	}
+
+	p := BriefProfile{
+		Pid: pid,
+	}
+	vals := rs.ValuesAsStrings()
+
+	for i := 0; i < len(vals)-1; i += 2 {
+		switch vals[i] {
+		case "name":
+			p.Name = vals[i+1]
+		case "profileimageurl":
+			p.ProfileImageUrl = vals[i+1]
+		case "profileimageurlhttps":
+			p.ProfileImageUrlHttps = vals[i+1]
+		}
+	}
+
+	return &p, nil
+}
+
 func (s *RedisStore) AddProfile(pid PidType, password string, pname string, bio string, feedurl string, parentpid PidType, email string, location string, url string, profileImageUrl string, profileImageUrlHttps string) error {
 	pwdhash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
@@ -528,6 +553,7 @@ func (s *RedisStore) TimelineRange(pid PidType, status string, ts time.Time, bef
 		itemkeys = append(itemkeys, vals[i+1])
 	}
 
+	profiles := make(map[PidType]*BriefProfile, 0)
 	sourcesKey := sourcesKey(pid)
 	items := make([]*FormattedItem, 0)
 
@@ -560,16 +586,46 @@ func (s *RedisStore) TimelineRange(pid PidType, status string, ts time.Time, bef
 			}
 
 			ts := int64(f)
-			source := ""
+			source := PidType("")
 
-			rs = s.tdb.Command("HGET", sourcesKey, key)
-			if !rs.IsOK() {
-				// Ignore
-			} else {
-				source = rs.ValueAsString()
+			if status == "p" {
+				rs = s.tdb.Command("HGET", sourcesKey, key)
+				if !rs.IsOK() {
+					// Ignore
+				} else {
+					source = PidType(rs.ValueAsString())
+				}
 			}
 
-			items = append(items, NewFormattedItem(item, ts, source))
+			fitem := NewFormattedItem(item, ts, source)
+
+			if profile, ok := profiles[item.Pid]; ok {
+				fitem.Author = profile
+			} else {
+				profile, err = s.BriefProfile(item.Pid)
+				if err != nil {
+					applog.Errorf("Could not obtain brief profile for %s: %s", item.Pid, err.Error())
+					continue
+				}
+				profiles[item.Pid] = profile
+				fitem.Author = profile
+			}
+
+			if source != PidType("") && source != item.Pid && source != pid {
+				if profile, ok := profiles[source]; ok {
+					fitem.Via = profile
+				} else {
+					profile, err = s.BriefProfile(source)
+					if err != nil {
+						applog.Errorf("Could not obtain brief profile for %s: %s", source, err.Error())
+						continue
+					}
+					profiles[source] = profile
+					fitem.Via = profile
+				}
+			}
+
+			items = append(items, fitem)
 		}
 	}
 	return items, nil
@@ -586,13 +642,13 @@ func (s *RedisStore) ItemInTimeline(item *Item, pid PidType, status string) ([]*
 		timelineKey = maybeKey(pid, "ts")
 	}
 
-	source := ""
+	source := PidType("")
 	sourcesKey := sourcesKey(pid)
 	rs := s.tdb.Command("HGET", sourcesKey, item.Key())
 	if !rs.IsOK() {
 		// Ignore
 	} else {
-		source = rs.ValueAsString()
+		source = PidType(rs.ValueAsString())
 	}
 
 	if item.IsEvent() {
