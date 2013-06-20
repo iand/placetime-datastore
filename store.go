@@ -553,8 +553,6 @@ func (s *RedisStore) TimelineRange(pid PidType, status string, ts time.Time, bef
 		itemkeys = append(itemkeys, vals[i+1])
 	}
 
-	profiles := make(map[PidType]*BriefProfile, 0)
-	sourcesKey := sourcesKey(pid)
 	items := make([]*FormattedItem, 0)
 
 	for ik := 0; ik < len(itemkeys); ik += 2 {
@@ -582,49 +580,15 @@ func (s *RedisStore) TimelineRange(pid PidType, status string, ts time.Time, bef
 			if err != nil {
 				applog.Errorf("Could not parse score from db as float: %s", err.Error())
 				continue
-
 			}
 
 			ts := int64(f)
-			source := PidType("")
 
-			if status == "p" {
-				rs = s.tdb.Command("HGET", sourcesKey, key)
-				if !rs.IsOK() {
-					// Ignore
-				} else {
-					source = PidType(rs.ValueAsString())
-				}
+			fitem, err := s.FormatItem(item, ts, pid)
+			if err != nil {
+				applog.Errorf("Could not format item: %s", err.Error())
+				continue
 			}
-
-			fitem := NewFormattedItem(item, ts, source)
-
-			if profile, ok := profiles[item.Pid]; ok {
-				fitem.Author = profile
-			} else {
-				profile, err = s.BriefProfile(item.Pid)
-				if err != nil {
-					applog.Errorf("Could not obtain brief profile for %s: %s", item.Pid, err.Error())
-					continue
-				}
-				profiles[item.Pid] = profile
-				fitem.Author = profile
-			}
-
-			if source != PidType("") && source != item.Pid && source != pid {
-				if profile, ok := profiles[source]; ok {
-					fitem.Via = profile
-				} else {
-					profile, err = s.BriefProfile(source)
-					if err != nil {
-						applog.Errorf("Could not obtain brief profile for %s: %s", source, err.Error())
-						continue
-					}
-					profiles[source] = profile
-					fitem.Via = profile
-				}
-			}
-
 			items = append(items, fitem)
 		}
 	}
@@ -642,6 +606,28 @@ func (s *RedisStore) ItemInTimeline(item *Item, pid PidType, status string) ([]*
 		timelineKey = maybeKey(pid, "ts")
 	}
 
+	if item.IsEvent() {
+		ets := s.ItemScore(item.EventKey(), timelineKey)
+		fevent, err := s.FormatItem(item, ets, pid)
+		if err != nil {
+			return items, err
+		}
+		items = append(items, fevent)
+	}
+
+	ts := s.ItemScore(item.Key(), timelineKey)
+
+	fitem, err := s.FormatItem(item, ts, pid)
+	if err != nil {
+		return items, err
+	}
+
+	items = append(items, fitem)
+
+	return items, nil
+}
+
+func (s *RedisStore) FormatItem(item *Item, ts int64, pid PidType) (*FormattedItem, error) {
 	source := PidType("")
 	sourcesKey := sourcesKey(pid)
 	rs := s.tdb.Command("HGET", sourcesKey, item.Key())
@@ -650,16 +636,25 @@ func (s *RedisStore) ItemInTimeline(item *Item, pid PidType, status string) ([]*
 	} else {
 		source = PidType(rs.ValueAsString())
 	}
+	fitem := &FormattedItem{Item: *item, Ts: ts}
+	fitem.Added = item.Added / 1000000000
+	fitem.Event = item.Event / 1000000000
 
-	if item.IsEvent() {
-		ets := s.ItemScore(item.EventKey(), timelineKey)
-		items = append(items, NewFormattedItem(item, ets, source))
+	aprofile, err := s.BriefProfile(item.Pid)
+	if err != nil {
+		return nil, err
 	}
+	fitem.Author = aprofile
 
-	ts := s.ItemScore(item.Key(), timelineKey)
-	items = append(items, NewFormattedItem(item, ts, source))
+	if source != PidType("") && source != item.Pid && source != pid {
+		sprofile, err := s.BriefProfile(source)
+		if err != nil {
+			return nil, err
+		}
+		fitem.Via = sprofile
+	}
+	return fitem, nil
 
-	return items, nil
 }
 
 func (s *RedisStore) ItemScore(itemKey string, timelineKey string) int64 {

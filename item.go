@@ -34,12 +34,12 @@ type FormattedItem struct {
 	Via    *BriefProfile `json:"via,omitempty"`
 }
 
-func NewFormattedItem(item *Item, ts int64, source PidType) *FormattedItem {
-	fitem := &FormattedItem{Item: *item, Ts: ts, Source: source}
-	fitem.Added = item.Added / 1000000000
-	fitem.Event = item.Event / 1000000000
-	return fitem
-}
+// func NewFormattedItem(item *Item, ts int64, source PidType) *FormattedItem {
+// 	fitem := &FormattedItem{Item: *item, Ts: ts, Source: source}
+// 	fitem.Added = item.Added / 1000000000
+// 	fitem.Event = item.Event / 1000000000
+// 	return fitem
+// }
 
 func (i *Item) String() string {
 	return fmt.Sprintf("Title: %sLink: %s", i.Text, i.Link)
