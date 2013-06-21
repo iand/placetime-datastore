@@ -1251,9 +1251,12 @@ func (s *RedisStore) AddItemToFollowerTimelines(pid PidType, ts int64, item *Ite
 	}
 
 	for _, followerpid := range rs.ValuesAsStrings() {
-		s.AddItemToTimeline(PidType(followerpid), pid, ts, item.Key())
-		if item.IsEvent() {
-			s.AddItemToTimeline(PidType(followerpid), pid, item.Event, item.EventKey())
+		// Don't add circular references
+		if PidType(followerpid) != item.Pid {
+			s.AddItemToTimeline(PidType(followerpid), pid, ts, item.Key())
+			if item.IsEvent() {
+				s.AddItemToTimeline(PidType(followerpid), pid, item.Event, item.EventKey())
+			}
 		}
 	}
 
