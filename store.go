@@ -692,7 +692,7 @@ func (s *RedisStore) ItemByKey(itemKey string) (*Item, error) {
 	return item, nil
 }
 
-func (s *RedisStore) AddItem(pid PidType, ets time.Time, text string, link string, image string, itemid ItemIdType, media string) (string, error) {
+func (s *RedisStore) AddItem(pid PidType, ets time.Time, text string, link string, image string, itemid ItemIdType, media string, duration int) (string, error) {
 
 	if itemid == "" {
 
@@ -716,14 +716,15 @@ func (s *RedisStore) AddItem(pid PidType, ets time.Time, text string, link strin
 	tsnano := time.Now().UnixNano()
 	item := &Item{
 
-		Id:    itemid,
-		Text:  text,
-		Link:  link,
-		Pid:   pid,
-		Added: tsnano,
-		Event: etsnano,
-		Image: image,
-		Media: media,
+		Id:       itemid,
+		Text:     text,
+		Link:     link,
+		Pid:      pid,
+		Added:    tsnano,
+		Event:    etsnano,
+		Image:    image,
+		Media:    media,
+		Duration: duration,
 	}
 
 	itemKey, err := s.SaveItem(item, 0)
