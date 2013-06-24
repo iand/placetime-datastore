@@ -692,7 +692,7 @@ func (s *RedisStore) ItemByKey(itemKey string) (*Item, error) {
 	return item, nil
 }
 
-func (s *RedisStore) AddItem(pid PidType, ets time.Time, text string, link string, image string, itemid ItemIdType, media string, duration int) (string, error) {
+func (s *RedisStore) AddItem(pid PidType, ets time.Time, text string, link string, image string, itemid ItemIdType, media string, duration int) (ItemIdType, error) {
 
 	if itemid == "" {
 
@@ -708,7 +708,7 @@ func (s *RedisStore) AddItem(pid PidType, ets time.Time, text string, link strin
 	itemKey := ItemKey(itemid)
 	if exists, _ := s.ItemExists(itemid); exists {
 		applog.Debugf("Attempted to add item %s but it already exists", itemid)
-		return itemKey, nil
+		return itemid, nil
 	}
 
 	etsnano := FakeEventPrecision(ets)
@@ -753,7 +753,7 @@ func (s *RedisStore) AddItem(pid PidType, ets time.Time, text string, link strin
 		}
 	}
 
-	return itemKey, nil
+	return itemid, nil
 }
 
 // lifetime is in seconds, 0 means permanent
