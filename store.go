@@ -25,7 +25,7 @@ const (
 
 	ORDERING_TS = "ts"
 
-	EVENTED_ITEM_PREFIX = '+'
+	// EVENTED_ITEM_PREFIX = '+'
 )
 
 var (
@@ -153,13 +153,13 @@ func ItemKey(itemid ItemIdType) string {
 	return fmt.Sprintf("item:%s", itemid)
 }
 
-func EventedItemKey(itemid ItemIdType) string {
-	return eventedItemKeyFromItemKey(ItemKey(itemid))
-}
+// func EventedItemKey(itemid ItemIdType) string {
+// 	return eventedItemKeyFromItemKey(ItemKey(itemid))
+// }
 
-func eventedItemKeyFromItemKey(itemKey string) string {
-	return fmt.Sprintf("%c%s", EVENTED_ITEM_PREFIX, itemKey)
-}
+// func eventedItemKeyFromItemKey(itemKey string) string {
+// 	return fmt.Sprintf("%c%s", EVENTED_ITEM_PREFIX, itemKey)
+// }
 
 func suggestedProfileKey(loc string) string {
 	return fmt.Sprintf("suggestedprofiles:%s", loc)
@@ -560,9 +560,9 @@ func (s *RedisStore) TimelineRange(pid PidType, status string, ts time.Time, bef
 		key := itemkeys[ik]
 		score := itemkeys[ik+1]
 
-		if key[0] == EVENTED_ITEM_PREFIX {
-			key = key[1:]
-		}
+		// if key[0] == EVENTED_ITEM_PREFIX {
+		// 	key = key[1:]
+		// }
 
 		rs = s.idb.Command("GET", key)
 		if !rs.IsOK() {
@@ -606,14 +606,14 @@ func (s *RedisStore) ItemInTimeline(item *Item, pid PidType, status string) ([]*
 		timelineKey = maybeKey(pid, "ts")
 	}
 
-	if item.IsEvent() {
-		ets := s.ItemScore(item.EventKey(), timelineKey)
-		fevent, err := s.FormatItem(item, ets, pid)
-		if err != nil {
-			return items, err
-		}
-		items = append(items, fevent)
-	}
+	// if item.IsEvent() {
+	// 	ets := s.ItemScore(item.EventKey(), timelineKey)
+	// 	fevent, err := s.FormatItem(item, ets, pid)
+	// 	if err != nil {
+	// 		return items, err
+	// 	}
+	// 	items = append(items, fevent)
+	// }
 
 	ts := s.ItemScore(item.Key(), timelineKey)
 
@@ -704,7 +704,7 @@ func (s *RedisStore) AddItem(pid PidType, ets time.Time, text string, link strin
 		itemid = ItemIdType(fmt.Sprintf("%x", hasher.Sum(nil)))
 	}
 
-	eventedItemKey := EventedItemKey(itemid)
+	// eventedItemKey := EventedItemKey(itemid)
 	itemKey := ItemKey(itemid)
 	if exists, _ := s.ItemExists(itemid); exists {
 		applog.Debugf("Attempted to add item %s but it already exists", itemid)
@@ -732,19 +732,21 @@ func (s *RedisStore) AddItem(pid PidType, ets time.Time, text string, link strin
 		return "", err
 	}
 
-	rs := s.tdb.Command("ZADD", maybeKey(pid, ORDERING_TS), item.Added, itemKey)
+	scheduledTime := item.DefaultScheduledTime()
+
+	rs := s.tdb.Command("ZADD", maybeKey(pid, ORDERING_TS), scheduledTime, itemKey)
 	if !rs.IsOK() {
 		return "", rs.Error()
 	}
 
-	if item.IsEvent() {
-		rs = s.tdb.Command("ZADD", maybeKey(pid, ORDERING_TS), item.Event, eventedItemKey)
-		if !rs.IsOK() {
-			return "", rs.Error()
-		}
-	}
+	// if item.IsEvent() {
+	// 	rs = s.tdb.Command("ZADD", maybeKey(pid, ORDERING_TS), item.Event, eventedItemKey)
+	// 	if !rs.IsOK() {
+	// 		return "", rs.Error()
+	// 	}
+	// }
 
-	s.AddItemToFollowerTimelines(pid, item.Added, item)
+	s.AddItemToFollowerTimelines(pid, scheduledTime, item)
 
 	if item.Link != "" && item.Image == "" {
 		rs := s.pdb.Command("SADD", ITEMS_NEEDING_IMAGES, itemid)
@@ -937,28 +939,32 @@ func (s *RedisStore) Promote(pid PidType, id ItemIdType) error {
 		return rs.Error()
 	}
 
-	tsnano := time.Now().UnixNano()
-	maybe_key := maybeKey(pid, ORDERING_TS)
-
-	rs = s.tdb.Command("ZADD", maybe_key, tsnano, itemKey)
-	if !rs.IsOK() {
-		return rs.Error()
-	}
-
 	item, err := s.Item(id)
 	if err != nil {
 		return err
 	}
 
-	if item.Event > 0 {
-		eventedItemKey := EventedItemKey(id)
-		rs = s.tdb.Command("ZADD", maybe_key, item.Event, eventedItemKey)
-		if !rs.IsOK() {
-			return rs.Error()
-		}
+	scheduledTime := time.Now().UnixNano()
+	if item.IsEvent() {
+		scheduledTime = item.Event
 	}
 
-	s.AddItemToFollowerTimelines(pid, tsnano, item)
+	maybe_key := maybeKey(pid, ORDERING_TS)
+
+	rs = s.tdb.Command("ZADD", maybe_key, scheduledTime, itemKey)
+	if !rs.IsOK() {
+		return rs.Error()
+	}
+
+	// if item.Event > 0 {
+	// 	eventedItemKey := EventedItemKey(id)
+	// 	rs = s.tdb.Command("ZADD", maybe_key, item.Event, eventedItemKey)
+	// 	if !rs.IsOK() {
+	// 		return rs.Error()
+	// 	}
+	// }
+
+	s.AddItemToFollowerTimelines(pid, scheduledTime, item)
 
 	return nil
 
@@ -968,7 +974,6 @@ func (s *RedisStore) Demote(pid PidType, id ItemIdType) error {
 
 	// TODO: abort if item is not in possibly timeline
 	itemKey := ItemKey(id)
-	eventedItemKey := EventedItemKey(id)
 
 	maybe_key := maybeKey(pid, ORDERING_TS)
 
@@ -977,10 +982,10 @@ func (s *RedisStore) Demote(pid PidType, id ItemIdType) error {
 		return rs.Error()
 	}
 
-	rs = s.tdb.Command("ZREM", maybe_key, eventedItemKey)
-	if !rs.IsOK() {
-		return rs.Error()
-	}
+	// rs = s.tdb.Command("ZREM", maybe_key, eventedItemKey)
+	// if !rs.IsOK() {
+	// 	return rs.Error()
+	// }
 
 	// TODO: don't add them here if they were manually added by the user
 
@@ -1242,7 +1247,7 @@ func keyExists(db *redis.Database, key string) bool {
 	return val
 }
 
-func (s *RedisStore) AddItemToFollowerTimelines(pid PidType, ts int64, item *Item) error {
+func (s *RedisStore) AddItemToFollowerTimelines(pid PidType, scheduledTime int64, item *Item) error {
 
 	rs := s.pdb.Command("ZRANGE", followersKey(pid), 0, MaxInt)
 	if !rs.IsOK() {
@@ -1253,10 +1258,10 @@ func (s *RedisStore) AddItemToFollowerTimelines(pid PidType, ts int64, item *Ite
 	for _, followerpid := range rs.ValuesAsStrings() {
 		// Don't add circular references
 		if PidType(followerpid) != item.Pid {
-			s.AddItemToTimeline(PidType(followerpid), pid, ts, item.Key())
-			if item.IsEvent() {
-				s.AddItemToTimeline(PidType(followerpid), pid, item.Event, item.EventKey())
-			}
+			s.AddItemToTimeline(PidType(followerpid), pid, scheduledTime, item.Key())
+			// if item.IsEvent() {
+			// 	s.AddItemToTimeline(PidType(followerpid), pid, item.Event, item.EventKey())
+			// }
 		}
 	}
 
@@ -1303,7 +1308,7 @@ func (s *RedisStore) RemoveItemFromFollowerTimelines(pid PidType, itemKey string
 
 	for _, followerpid := range rs.ValuesAsStrings() {
 		s.RemoveItemFromTimeline(PidType(followerpid), pid, itemKey)
-		s.RemoveItemFromTimeline(PidType(followerpid), pid, eventedItemKeyFromItemKey(itemKey))
+		// s.RemoveItemFromTimeline(PidType(followerpid), pid, eventedItemKeyFromItemKey(itemKey))
 		// if item.IsEvent() {
 		// 	s.RemoveItemFromTimeline(followerpid, pid, item.Event, item.EventKey())
 		// }

@@ -53,9 +53,17 @@ func (i *Item) Key() string {
 	return ItemKey(i.Id)
 }
 
-func (i *Item) EventKey() string {
-	return EventedItemKey(i.Id)
+func (i *Item) DefaultScheduledTime() int64 {
+	if i.Event > 0 {
+		return i.Event
+	}
+
+	return i.Added
 }
+
+// func (i *Item) EventKey() string {
+// 	return EventedItemKey(i.Id)
+// }
 
 func (item *Item) Sanitize() {
 	if item.Added == 0 {
