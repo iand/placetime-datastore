@@ -708,7 +708,8 @@ func (s *RedisStore) AddItem(pid PidType, ets time.Time, text string, link strin
 	itemKey := ItemKey(itemid)
 	if exists, _ := s.ItemExists(itemid); exists {
 		applog.Debugf("Attempted to add item %s but it already exists", itemid)
-		return itemid, nil
+		// promote it instead
+		return itemid, s.Promote(pid, itemid)
 	}
 
 	etsnano := FakeEventPrecision(ets)
