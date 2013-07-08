@@ -849,6 +849,10 @@ func (s *RedisStore) ResetAll() error {
 
 // Make pid follow followpid
 func (s *RedisStore) Follow(pid PidType, followpid PidType) error {
+	if pid == followpid {
+		return fmt.Errorf("pid cannot follow itself")
+	}
+
 	score := followerScore(time.Now())
 
 	rs := s.pdb.Command("ZADD", followingKey(pid), score, followpid)
