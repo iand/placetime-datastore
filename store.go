@@ -720,7 +720,6 @@ func (s *RedisStore) AddItem(pid PidType, ets time.Time, text string, link strin
 		itemid = ItemIdType(fmt.Sprintf("%x", hasher.Sum(nil)))
 	}
 
-	itemKey := ItemKey(itemid)
 	if exists, _ := s.ItemExists(itemid); exists {
 		applog.Debugf("Attempted to add item %s but it already exists", itemid)
 		// promote it instead
@@ -755,13 +754,6 @@ func (s *RedisStore) AddItem(pid PidType, ets time.Time, text string, link strin
 		return "", rs.Error()
 	}
 
-	// if item.IsEvent() {
-	// 	rs = s.tdb.Command("ZADD", maybeKey(pid, ORDERING_TS), item.Event, eventedItemKey)
-	// 	if !rs.IsOK() {
-	// 		return "", rs.Error()
-	// 	}
-	// }
-
 	s.AddItemToFollowerTimelines(pid, scheduledTime, item)
 
 	if item.Link != "" && item.Image == "" {
@@ -778,22 +770,9 @@ func (s *RedisStore) AddItem(pid PidType, ets time.Time, text string, link strin
 func (s *RedisStore) SaveItem(item *Item, lifetime int) (string, error) {
 
 	item.Sanitize()
-	if strings.Contains(item.Image, "/") {
-		applog.Debugf("Caching image from %s", item.Image)
-		item.Image, _ = CacheImage(item.Image, s.imgpath)
-	}
+	s.UpdateItem(item)
 
 	itemKey := ItemKey(item.Id)
-
-	json, err := json.Marshal(item)
-	if err != nil {
-		return "", err
-	}
-
-	rs := s.idb.Command("SET", itemKey, json)
-	if !rs.IsOK() {
-		return "", rs.Error()
-	}
 
 	if lifetime > 0 {
 		rs := s.pdb.Command("EXPIRE", itemKey, lifetime)
@@ -805,16 +784,6 @@ func (s *RedisStore) SaveItem(item *Item, lifetime int) (string, error) {
 
 	return itemKey, nil
 
-}
-
-func (s *RedisStore) ItemExists(id ItemIdType) (bool, error) {
-	rs := s.idb.Command("EXISTS", ItemKey(id))
-	if !rs.IsOK() {
-		return false, rs.Error()
-	}
-
-	val, err := rs.ValueAsBool()
-	return val, err
 }
 
 func (s *RedisStore) UpdateItem(item *Item) error {
@@ -836,6 +805,16 @@ func (s *RedisStore) UpdateItem(item *Item) error {
 	}
 	return nil
 
+}
+
+func (s *RedisStore) ItemExists(id ItemIdType) (bool, error) {
+	rs := s.idb.Command("EXISTS", ItemKey(id))
+	if !rs.IsOK() {
+		return false, rs.Error()
+	}
+
+	val, err := rs.ValueAsBool()
+	return val, err
 }
 
 func (s *RedisStore) DeleteMaybeItems(pid PidType) error {
