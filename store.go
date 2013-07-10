@@ -7,9 +7,16 @@ import (
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
+	"github.com/iand/salience"
+	"image"
+	_ "image/jpeg"
+	"image/png"
 	"io"
 	"log"
 	"math/rand"
+	"net/http"
+	"os"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -26,6 +33,11 @@ const (
 	ORDERING_TS = "ts"
 
 	// EVENTED_ITEM_PREFIX = '+'
+)
+
+const (
+	FeedTypeRss      = "rss"
+	FeedTypeEventful = "eventful"
 )
 
 var (
@@ -45,7 +57,7 @@ func (i ItemIdType) String() string {
 	return strings.ToLower(string(i))
 }
 
-func InitRedisStore(config Config) {
+func InitRedisStore(config Config, imgpath string) {
 	// Contains all profiles and meta stuff
 	profiledb := redis.Connect(redis.Configuration{
 		Database: config.Profile.Database,
@@ -85,10 +97,11 @@ func InitRedisStore(config Config) {
 	applog.Infof("Session datastore: %s/%d", config.Session.Address, config.Session.Database)
 
 	store = &RedisStore{
-		tdb: timelinedb,
-		idb: itemdb,
-		pdb: profiledb,
-		sdb: sessiondb,
+		tdb:     timelinedb,
+		idb:     itemdb,
+		pdb:     profiledb,
+		sdb:     sessiondb,
+		imgpath: imgpath,
 	}
 
 }
@@ -99,10 +112,11 @@ func NewRedisStore() *RedisStore {
 }
 
 type RedisStore struct {
-	tdb *redis.Database
-	idb *redis.Database
-	pdb *redis.Database
-	sdb *redis.Database
+	tdb     *redis.Database
+	idb     *redis.Database
+	pdb     *redis.Database
+	sdb     *redis.Database
+	imgpath string
 }
 
 func itemScore(t time.Time) float64 {
@@ -249,6 +263,8 @@ func (s *RedisStore) Profile(pid PidType) (*Profile, error) {
 			p.Name = vals[i+1]
 		case "bio":
 			p.Bio = vals[i+1]
+		case "feedtype":
+			p.FeedType = vals[i+1]
 		case "feedurl":
 			p.FeedUrl = vals[i+1]
 		case "parentpid":
@@ -324,14 +340,14 @@ func (s *RedisStore) BriefProfile(pid PidType) (*BriefProfile, error) {
 	return &p, nil
 }
 
-func (s *RedisStore) AddProfile(pid PidType, password string, pname string, bio string, feedurl string, parentpid PidType, email string, location string, url string, profileImageUrl string, profileImageUrlHttps string, itemType string) error {
+func (s *RedisStore) AddProfile(pid PidType, password string, pname string, bio string, feedtype string, feedurl string, parentpid PidType, email string, location string, url string, profileImageUrl string, profileImageUrlHttps string, itemType string) error {
 	pwdhash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return err
 	}
 
 	joined := time.Now().Unix()
-	rs := s.pdb.Command("HMSET", profileKey(pid), "name", pname, "bio", bio, "feedurl", feedurl, "pwdhash", pwdhash, "parentpid", parentpid, "email", email, "joined", joined, "location", location, "url", url, "profileimageurl", profileImageUrl, "profileimageurlhttps", profileImageUrlHttps, "itemtype", itemType)
+	rs := s.pdb.Command("HMSET", profileKey(pid), "name", pname, "bio", bio, "feedtype", feedtype, "feedurl", feedurl, "pwdhash", pwdhash, "parentpid", parentpid, "email", email, "joined", joined, "location", location, "url", url, "profileimageurl", profileImageUrl, "profileimageurlhttps", profileImageUrlHttps, "itemtype", itemType)
 
 	if !rs.IsOK() {
 		return rs.Error()
@@ -704,7 +720,6 @@ func (s *RedisStore) AddItem(pid PidType, ets time.Time, text string, link strin
 		itemid = ItemIdType(fmt.Sprintf("%x", hasher.Sum(nil)))
 	}
 
-	// eventedItemKey := EventedItemKey(itemid)
 	itemKey := ItemKey(itemid)
 	if exists, _ := s.ItemExists(itemid); exists {
 		applog.Debugf("Attempted to add item %s but it already exists", itemid)
@@ -763,6 +778,10 @@ func (s *RedisStore) AddItem(pid PidType, ets time.Time, text string, link strin
 func (s *RedisStore) SaveItem(item *Item, lifetime int) (string, error) {
 
 	item.Sanitize()
+	if strings.Contains(item.Image, "/") {
+		applog.Debugf("Caching image from %s", item.Image)
+		item.Image, _ = CacheImage(item.Image, s.imgpath)
+	}
 
 	itemKey := ItemKey(item.Id)
 
@@ -799,6 +818,11 @@ func (s *RedisStore) ItemExists(id ItemIdType) (bool, error) {
 }
 
 func (s *RedisStore) UpdateItem(item *Item) error {
+	if strings.Contains(item.Image, "/") {
+		applog.Debugf("Caching image from %s", item.Image)
+		item.Image, _ = CacheImage(item.Image, s.imgpath)
+	}
+
 	itemKey := ItemKey(item.Id)
 
 	json, err := json.Marshal(item)
@@ -1156,9 +1180,8 @@ func (s *RedisStore) Feeds(pid PidType) ([]*Profile, error) {
 	for _, fid := range vals {
 		feed, err := s.Profile(PidType(fid))
 		if err != nil {
-			// TODO: log
-		} else {
-
+			applog.Errorf("Could not retrieve profile for feed %s: %s", fid, err.Error())
+			continue
 		}
 		feeds = append(feeds, feed)
 	}
@@ -1367,4 +1390,41 @@ func FakeEventPrecision(ets time.Time) int64 {
 	}
 
 	return etsnano
+}
+
+func CacheImage(url string, imgpath string) (string, error) {
+	imgResp, err := http.Get(url)
+	if err != nil {
+		applog.Errorf("Error fetching image from %s: %s", url, err.Error())
+		return url, err
+	}
+
+	defer imgResp.Body.Close()
+	img, _, err := image.Decode(imgResp.Body)
+	if err != nil {
+		applog.Errorf("Error decoding image from %s: %s", url, err.Error())
+		return url, err
+	}
+
+	imgOut := salience.Crop(img, 460, 160)
+
+	hasher := md5.New()
+	io.WriteString(hasher, url)
+	id := fmt.Sprintf("%x", hasher.Sum(nil))
+
+	bestImageFilename := fmt.Sprintf("%s.png", id)
+
+	foutName := path.Join(imgpath, bestImageFilename)
+
+	fout, err := os.OpenFile(foutName, os.O_CREATE|os.O_WRONLY, 0666)
+	if err != nil {
+		return url, err
+	}
+
+	if err = png.Encode(fout, imgOut); err != nil {
+		return url, err
+	}
+
+	return bestImageFilename, nil
+
 }

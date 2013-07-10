@@ -16,6 +16,7 @@ type Profile struct {
 	FollowerCount        int     `json:"followercount"`
 	FollowingCount       int     `json:"followingcount"`
 	FeedCount            int     `json:"feedcount"`
+	FeedType             string  `json:"feedtype"`
 	FeedUrl              string  `json:"feedurl,omitempty"`
 	ParentPid            PidType `json:"parentpid,omitempty"`
 	ItemType             string  `json:"itemtype,omitempty"`
